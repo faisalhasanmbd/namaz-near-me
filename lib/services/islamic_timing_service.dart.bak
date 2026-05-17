@@ -1,0 +1,241 @@
+import 'dart:math' as math;
+
+import '../models/daily_islamic_timings.dart';
+
+class IslamicTimingService {
+  static const _moradabadLatitude = 28.8386;
+  static const _moradabadLongitude = 78.7733;
+  static const _timezoneOffsetMinutes = 330;
+  static const _fajrAngle = -18.0;
+  static const _ishaAngle = -18.0;
+
+  DailyIslamicTimings today({DateTime? now}) {
+    final date = now ?? DateTime.now();
+    final sunrise = _solarTime(date, -0.833, beforeNoon: true);
+    final sunset = _solarTime(date, -0.833, beforeNoon: false);
+    final fajr = _solarTime(date, _fajrAngle, beforeNoon: true);
+    final isha = _solarTime(date, _ishaAngle, beforeNoon: false);
+    final zohar = _solarNoonMinutes(date).round();
+    final asr = _asrTime(date, shadowFactor: 2);
+    final sehriEnd = fajr - 6;
+    final zawalStart = zohar - 10;
+    final zawalEnd = zohar - 1;
+    final tahajjudStart =
+        _normalizeMinutes(isha + _nightLength(isha, fajr) ~/ 2);
+
+    return DailyIslamicTimings(
+      weekday: _weekday(date),
+      englishDate: _englishDate(date),
+      hijriDate: _hijriDate(date),
+      entries: [
+        IslamicTimeEntry(label: 'Khatm Sehri', time: _formatTime(sehriEnd)),
+        IslamicTimeEntry(label: 'Waqt Fajr', time: _formatTime(fajr)),
+        IslamicTimeEntry(label: 'Sunrise', time: _formatTime(sunrise)),
+        IslamicTimeEntry(
+          label: 'Zawal',
+          time: '${_formatTime(zawalStart)} - ${_formatTime(zawalEnd)}',
+        ),
+        IslamicTimeEntry(label: 'Waqt Zohar', time: _formatTime(zohar)),
+        IslamicTimeEntry(label: 'Waqt Asr', time: _formatTime(asr)),
+        IslamicTimeEntry(label: 'Maghrib / Iftar', time: _formatTime(sunset)),
+        IslamicTimeEntry(label: 'Waqt Isha', time: _formatTime(isha)),
+        IslamicTimeEntry(
+          label: 'Tahajjud',
+          time: '${_formatTime(tahajjudStart)} - ${_formatTime(fajr)}',
+        ),
+        IslamicTimeEntry(
+          label: 'Roza',
+          time: '${_formatTime(sehriEnd)} - ${_formatTime(sunset)}',
+        ),
+      ],
+    );
+  }
+
+  static double _solarNoonMinutes(DateTime date) {
+    final day = _dayOfYear(date);
+    final eqTime = _equationOfTime(day);
+    return 720 - 4 * _moradabadLongitude - eqTime + _timezoneOffsetMinutes;
+  }
+
+  static int _solarTime(DateTime date, double altitude,
+      {required bool beforeNoon}) {
+    final day = _dayOfYear(date);
+    final declination = _sunDeclination(day);
+    final noon = _solarNoonMinutes(date);
+    final hourAngle = _hourAngle(altitude, declination);
+    final minutes = beforeNoon ? noon - hourAngle * 4 : noon + hourAngle * 4;
+    return _normalizeMinutes(minutes.round());
+  }
+
+  static int _asrTime(DateTime date, {required int shadowFactor}) {
+    final day = _dayOfYear(date);
+    final declination = _sunDeclination(day);
+    final lat = _degToRad(_moradabadLatitude);
+    final dec = _degToRad(declination);
+    final angle = _radToDeg(
+      math.atan(1 / (shadowFactor + math.tan((lat - dec).abs()))),
+    );
+    final noon = _solarNoonMinutes(date);
+    final hourAngle = _hourAngle(angle, declination);
+    return _normalizeMinutes((noon + hourAngle * 4).round());
+  }
+
+  static int _nightLength(int isha, int fajr) {
+    return fajr > isha ? fajr - isha : 24 * 60 - isha + fajr;
+  }
+
+  static double _hourAngle(double altitude, double declination) {
+    final lat = _degToRad(_moradabadLatitude);
+    final dec = _degToRad(declination);
+    final alt = _degToRad(altitude);
+    final value = (math.sin(alt) - math.sin(lat) * math.sin(dec)) /
+        (math.cos(lat) * math.cos(dec));
+    return _radToDeg(math.acos(value.clamp(-1, 1)));
+  }
+
+  static double _equationOfTime(int dayOfYear) {
+    final gamma = 2 * math.pi / 365 * (dayOfYear - 1);
+    return 229.18 *
+        (0.000075 +
+            0.001868 * math.cos(gamma) -
+            0.032077 * math.sin(gamma) -
+            0.014615 * math.cos(2 * gamma) -
+            0.040849 * math.sin(2 * gamma));
+  }
+
+  static double _sunDeclination(int dayOfYear) {
+    final gamma = 2 * math.pi / 365 * (dayOfYear - 1);
+    return _radToDeg(
+      0.006918 -
+          0.399912 * math.cos(gamma) +
+          0.070257 * math.sin(gamma) -
+          0.006758 * math.cos(2 * gamma) +
+          0.000907 * math.sin(2 * gamma) -
+          0.002697 * math.cos(3 * gamma) +
+          0.00148 * math.sin(3 * gamma),
+    );
+  }
+
+  static int _dayOfYear(DateTime date) {
+    return date.difference(DateTime(date.year)).inDays + 1;
+  }
+
+  static int _normalizeMinutes(int minutes) {
+    return ((minutes % (24 * 60)) + 24 * 60) % (24 * 60);
+  }
+
+  static String _formatTime(int totalMinutes) {
+    final minutes = _normalizeMinutes(totalMinutes);
+    final hour24 = minutes ~/ 60;
+    final minute = minutes % 60;
+    final period = hour24 >= 12 ? 'PM' : 'AM';
+    final hour12 = hour24 % 12 == 0 ? 12 : hour24 % 12;
+    return '$hour12:${minute.toString().padLeft(2, '0')} $period';
+  }
+
+  static String _englishDate(DateTime date) {
+    return '${date.day.toString().padLeft(2, '0')} ${_month(date.month)} ${date.year}';
+  }
+
+  static String _hijriDate(DateTime date) {
+    final hijri = _gregorianToHijri(date);
+    return '${hijri.day} ${_hijriMonth(hijri.month)} ${hijri.year}';
+  }
+
+  static _HijriDate _gregorianToHijri(DateTime date) {
+    final jd = _gregorianToJulianDay(date.year, date.month, date.day);
+    final year = ((30 * (jd - 1948439.5) + 10646) / 10631).floor();
+    final month = math.min(
+      12,
+      ((jd - (29 + _islamicToJulianDay(year, 1, 1))) / 29.5).ceil() + 1,
+    );
+    final day = (jd - _islamicToJulianDay(year, month, 1) + 1).floor();
+    return _HijriDate(year: year, month: month, day: day);
+  }
+
+  static double _gregorianToJulianDay(int year, int month, int day) {
+    final a = ((14 - month) / 12).floor();
+    final y = year + 4800 - a;
+    final m = month + 12 * a - 3;
+    return day +
+        ((153 * m + 2) / 5).floor() +
+        365 * y +
+        (y / 4).floor() -
+        (y / 100).floor() +
+        (y / 400).floor() -
+        32045;
+  }
+
+  static double _islamicToJulianDay(int year, int month, int day) {
+    return day +
+        (29.5 * (month - 1)).ceil() +
+        (year - 1) * 354 +
+        ((3 + 11 * year) / 30).floor() +
+        1948439.5 -
+        1;
+  }
+
+  static String _weekday(DateTime date) {
+    const names = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    return names[date.weekday - 1];
+  }
+
+  static String _month(int month) {
+    const names = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    return names[month - 1];
+  }
+
+  static String _hijriMonth(int month) {
+    const names = [
+      'Muharram',
+      'Safar',
+      'Rabi al-Awwal',
+      'Rabi al-Thani',
+      'Jumada al-Awwal',
+      'Jumada al-Thani',
+      'Rajab',
+      'Shaaban',
+      'Ramadan',
+      'Shawwal',
+      "Zi'Qadah",
+      'Zil Hijjah',
+    ];
+    return names[month - 1];
+  }
+
+  static double _degToRad(double degrees) => degrees * math.pi / 180;
+  static double _radToDeg(double radians) => radians * 180 / math.pi;
+}
+
+class _HijriDate {
+  const _HijriDate({
+    required this.year,
+    required this.month,
+    required this.day,
+  });
+
+  final int year;
+  final int month;
+  final int day;
+}

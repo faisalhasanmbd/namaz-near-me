@@ -1,0 +1,1588 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'l10n/app_localizations.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import 'data/sample_mosques.dart';
+import 'models/daily_islamic_timings.dart';
+import 'models/mosque.dart';
+import 'services/islamic_timing_service.dart';
+import 'services/jamaat_sorter.dart';
+import 'services/location_service.dart';
+import 'screens/suggest_edit_screen.dart';
+import 'screens/suggest_edit_screen.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  runApp(const NamazNearMeApp());
+}
+
+class NamazNearMeApp extends StatelessWidget {
+  const NamazNearMeApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Namaz Near Me',
+      debugShowCheckedModeBanner: false,
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('en'),
+        Locale('ur'),
+        Locale('ar'),
+        Locale('hi'),
+        Locale('id'),
+        Locale('tr'),
+        Locale('fr'),
+      ],
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0F7C68),
+          brightness: Brightness.light,
+        ),
+        useMaterial3: true,
+      ),
+      home: const NearbyMosquesScreen(),
+    );
+  }
+}
+
+class NearbyMosquesScreen extends StatefulWidget {
+  const NearbyMosquesScreen({super.key});
+
+  @override
+  State<NearbyMosquesScreen> createState() => _NearbyMosquesScreenState();
+}
+
+class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
+  String _selectedNamaz = 'all';
+  int _radiusKm = 25;
+  UserLocation _location = LocationService.moradabadCenter;
+  bool _loadingLocation = true;
+  CityInfo _selectedCity = indianCities.first;
+  String _searchQuery = '';
+  late final Stream<List<Mosque>> _mosquesStream;
+
+
+
+  @override
+  void initState() {
+    super.initState();
+    _mosquesStream = _watchMosques();
+    _loadLocation();
+  }
+
+  Future<void> _loadLocation() async {
+    final location = await LocationService().currentOrFallback();
+    if (!mounted) return;
+    setState(() {
+      _location = location;
+      _loadingLocation = false;
+    });
+  }
+
+  Future<void> _openSearch(BuildContext context) async {
+    final mosquesWithDistance = LocationService().applyDistances([], _location);
+    final allResults = sortMosquesForUser(mosquesWithDistance, now: DateTime.now());
+    await showSearch<String>(
+      context: context,
+      delegate: _MosqueSearchDelegate(results: allResults),
+    );
+  }
+
+  Future<void> _openCitySelector(BuildContext context) async {
+    final selected = await showModalBottomSheet<CityInfo>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _CitySearchSheet(selectedCity: _selectedCity),
+    );
+    if (selected != null && mounted) {
+      setState(() => _selectedCity = selected);
+
+    }
+  }
+
+  Future<void> _openContributorScreen(BuildContext context) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const ContributorSignupScreen(),
+      ),
+    );
+  }
+
+  
+
+  List<MosqueResult> _lastResults = [];
+
+  @override
+  Widget build(BuildContext context) {
+    final dailyTimings = IslamicTimingService(
+      latitude: _selectedCity.latitude,
+      longitude: _selectedCity.longitude,
+    ).today();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Namaz Near Me'),
+        centerTitle: false,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'Search mosque',
+            onPressed: () => _openSearch(context),
+          ),
+          TextButton.icon(
+            onPressed: () => _openCitySelector(context),
+            icon: const Icon(Icons.location_city),
+            label: Text(_selectedCity.name, overflow: TextOverflow.ellipsis),
+          ),
+          TextButton.icon(
+            onPressed: () => _openContributorScreen(context),
+            icon: const Icon(Icons.edit_calendar),
+            label: const Text('Update'),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openContributorScreen(context),
+        icon: const Icon(Icons.add_location_alt),
+        label: const Text('Add mosque'),
+      ),
+      body: SafeArea(
+        child: StreamBuilder<List<Mosque>>(
+          stream: _mosquesStream,
+          initialData: const [],
+          builder: (context, snapshot) {
+            final mosques = snapshot.data ?? [];
+            final mosquesWithDistance = LocationService().applyDistances(
+              mosques,
+              _location,
+            );
+            final results = sortMosquesForUser(
+              mosquesWithDistance
+                  .where((m) => m.distanceMeters <= _radiusKm * 1000)
+                  .toList(),
+              now: DateTime.now(),
+              namazFilter: _selectedNamaz,
+            );
+            _lastResults = results;
+
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                const Text(
+                  'Initiated by Food4U / FOODOMATIC Moradabad.',
+                  style: TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 16),
+                _DailyIslamicTimingPanel(
+                  timings: dailyTimings,
+                  cityName: _selectedCity.name,
+                ),
+                const SizedBox(height: 16),
+                _LocationPanel(
+                  radiusKm: _radiusKm,
+                  loadingLocation: _loadingLocation,
+                  isCurrentLocation: _location.isCurrentLocation,
+                  onRefreshLocation: _loadLocation,
+                  onRadiusChanged: (value) => setState(() => _radiusKm = value),
+                  cityName: _selectedCity.name,
+                ),
+                const SizedBox(height: 16),
+                _NamazFilter(
+                  selectedNamaz: _selectedNamaz,
+                  onSelected: (value) => setState(() => _selectedNamaz = value),
+                ),
+                const SizedBox(height: 16),
+                if (snapshot.hasError)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      'Live updates unavailable.',
+                      style: TextStyle(color: Colors.black54, fontSize: 12),
+                    ),
+                  ),
+                if (results.isEmpty)
+                  const _EmptyState()
+                else
+                  for (final result in results) ...[
+                    _MosqueCard(result: result),
+                    const SizedBox(height: 12),
+                  ],
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _DailyIslamicTimingPanel extends StatelessWidget {
+  const _DailyIslamicTimingPanel({required this.timings, required this.cityName});
+
+  final DailyIslamicTimings timings;
+  final String cityName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F7C68),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Namaz Times — $cityName',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${timings.weekday}  |  ${timings.hijriDate}  |  ${timings.englishDate}',
+            style: const TextStyle(color: Colors.white),
+          ),
+          const SizedBox(height: 12),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: timings.entries.length,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              mainAxisExtent: 54,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+            ),
+            itemBuilder: (context, index) {
+              final entry = timings.entries[index];
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      entry.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                    ),
+                    Text(
+                      entry.time,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Auto-calculated daily.',
+            style: TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CitySearchSheet extends StatefulWidget {
+  const _CitySearchSheet({required this.selectedCity});
+  final CityInfo selectedCity;
+  @override
+  State<_CitySearchSheet> createState() => _CitySearchSheetState();
+}
+
+class _CitySearchSheetState extends State<_CitySearchSheet> {
+  final _search = TextEditingController();
+  List<CityInfo> _filtered = indianCities;
+
+  @override
+  void dispose() { _search.dispose(); super.dispose(); }
+
+  void _onSearch(String q) {
+    final ql = q.toLowerCase();
+    setState(() {
+      _filtered = indianCities.where((c) =>
+        c.name.toLowerCase().contains(ql) ||
+        c.state.toLowerCase().contains(ql)).toList();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.85,
+      maxChildSize: 0.95,
+      minChildSize: 0.5,
+      expand: false,
+      builder: (context, sc) => Column(children: [
+        const SizedBox(height: 12),
+        Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(2))),
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: TextField(
+            controller: _search,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: 'Search city or state...',
+              prefixIcon: const Icon(Icons.search),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              contentPadding: const EdgeInsets.symmetric(vertical: 0),
+            ),
+            onChanged: _onSearch,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Expanded(child: ListView.builder(
+          controller: sc,
+          itemCount: _filtered.length,
+          itemBuilder: (context, i) {
+            final city = _filtered[i];
+            final isSel = city.name == widget.selectedCity.name;
+            return ListTile(
+              leading: Icon(isSel ? Icons.location_on : Icons.location_city,
+                color: isSel ? const Color(0xFF0F7C68) : Colors.black45),
+              title: Text(city.name, style: TextStyle(
+                fontWeight: isSel ? FontWeight.w800 : FontWeight.normal,
+                color: isSel ? const Color(0xFF0F7C68) : null)),
+              subtitle: Text(city.state),
+              trailing: isSel ? const Icon(Icons.check, color: Color(0xFF0F7C68)) : null,
+              onTap: () => Navigator.of(context).pop(city),
+            );
+          },
+        )),
+      ]),
+    );
+  }
+}
+
+String _mosqueKey(String name) {
+  return name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
+}
+
+Mosque _mosqueFromFirestore(Map<String, dynamic> data, Mosque? existing) {
+  final timings = _mergeTimings(data['timings'], existing?.timings);
+  final updatedAt = _readDate(data['timing_updated_at']) ??
+      _readDate(data['updated_at']) ??
+      existing?.timingUpdatedAt ??
+      DateTime.now();
+
+  if (existing != null) {
+    return existing.copyWith(
+      area: _readString(data['area']) ?? existing.area,
+      address: _readString(data['address']) ?? existing.address,
+      timings: timings,
+      isVerified: (data['timing_verification_status'] == 'admin_verified' || data['timing_verification_status'] == 'source_verified') ||
+          existing.isVerified,
+      timingVerificationStatus: _readString(data['timing_verification_status']) ??
+          existing.timingVerificationStatus,
+      timingVerifiedByName:
+          _readString(data['timing_verified_by_name']) ??
+              existing.timingVerifiedByName,
+      timingVerifiedByPhone:
+          _readString(data['timing_verified_by_phone']) ??
+              existing.timingVerifiedByPhone,
+      timingUpdatedAt: updatedAt,
+      placeId: _readString(data["place_id"]),
+    );
+  }
+
+  return Mosque(
+    name: _readString(data['name']) ?? 'Unnamed mosque',
+    area: _readString(data['area']) ?? 'Area pending',
+    address: _readString(data['address']) ?? 'Address pending',
+    latitude: _readDouble(data['latitude']),
+    longitude: _readDouble(data['longitude']),
+    distanceMeters: 999999,
+    timings: timings,
+    isVerified: data['timing_verification_status'] == 'admin_verified' || data['timing_verification_status'] == 'source_verified',
+    timingVerificationStatus:
+        _readString(data['timing_verification_status']) ?? 'source_verified',
+    timingVerifiedByName: _readString(data['timing_verified_by_name']),
+    timingVerifiedByPhone: _readString(data['timing_verified_by_phone']),
+    timingUpdatedAt: updatedAt,
+    placeId: _readString(data['place_id']),
+  );
+}
+
+NamazTiming _mergeTimings(dynamic raw, NamazTiming? fallback) {
+  final map = raw is Map ? raw : const {};
+  return NamazTiming(
+    fajr: _readTiming(map['fajr']) ?? fallback?.fajr,
+    zohar: _readTiming(map['zohar']) ?? fallback?.zohar,
+    asr: _readTiming(map['asr']) ?? fallback?.asr,
+    maghrib: _readTiming(map['maghrib']) ?? fallback?.maghrib,
+    isha: _readTiming(map['isha']) ?? fallback?.isha,
+    juma: _readTiming(map['juma']) ?? fallback?.juma,
+    eidUlFitr: _readTiming(map['eid_ul_fitr']) ?? fallback?.eidUlFitr,
+    eidUlAzha: _readTiming(map['eid_ul_azha']) ?? fallback?.eidUlAzha,
+  );
+}
+
+String? _readTiming(dynamic value) {
+  return normalizeTimingInput(_readString(value) ?? '');
+}
+
+String? _readString(dynamic value) {
+  if (value == null) return null;
+  final text = value.toString().trim();
+  if (text.isEmpty) return null;
+  return text;
+}
+
+double? _readDouble(dynamic value) {
+  if (value is num) return value.toDouble();
+  return double.tryParse(value?.toString() ?? '');
+}
+
+DateTime? _readDate(dynamic value) {
+  if (value is Timestamp) return value.toDate();
+  if (value is DateTime) return value;
+  return DateTime.tryParse(value?.toString() ?? '');
+}
+
+class ContributorSignupScreen extends StatefulWidget {
+  const ContributorSignupScreen({super.key});
+
+  @override
+  State<ContributorSignupScreen> createState() =>
+      _ContributorSignupScreenState();
+}
+
+class _ContributorSignupScreenState extends State<ContributorSignupScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _cityController = TextEditingController(text: 'Moradabad');
+  final _areaController = TextEditingController();
+  final _newMosqueController = TextEditingController();
+  final _addressController = TextEditingController();
+  final _fajrController = TextEditingController();
+  final _zoharController = TextEditingController();
+  final _asrController = TextEditingController();
+  final _maghribController = TextEditingController();
+  final _ishaController = TextEditingController();
+  final _jumaController = TextEditingController();
+  final _eidUlFitrController = TextEditingController();
+  final _eidUlAzhaController = TextEditingController();
+  final _otpController = TextEditingController();
+
+  String _role = 'Volunteer';
+  String _maslak = 'Not specified';
+  String _mosqueMode = 'existing';
+  Mosque? _selectedMosque = sampleMosques.first;
+  bool _firebaseReady = false;
+  bool _sendingOtp = false;
+  bool _verifyingOtp = false;
+  bool _submitting = false;
+  bool _otpSent = false;
+  bool _phoneVerified = false;
+  String? _verificationId;
+  String? _otpStatusMessage;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _phoneController.dispose();
+    _cityController.dispose();
+    _areaController.dispose();
+    _newMosqueController.dispose();
+    _addressController.dispose();
+    _fajrController.dispose();
+    _zoharController.dispose();
+    _asrController.dispose();
+    _maghribController.dispose();
+    _ishaController.dispose();
+    _jumaController.dispose();
+    _eidUlFitrController.dispose();
+    _eidUlAzhaController.dispose();
+    _otpController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Contributor signup')),
+      body: SafeArea(
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Text(
+                'Update timings or add a new mosque',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Verify your mobile number, then update timings directly.',
+                style: TextStyle(color: Colors.black54),
+              ),
+              const SizedBox(height: 20),
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Your name',
+                  border: OutlineInputBorder(),
+                ),
+                validator: _required,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _phoneController,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'Mobile number',
+                  prefixText: '+91 ',
+                  border: OutlineInputBorder(),
+                ),
+                validator: _required,
+              ),
+              const SizedBox(height: 10),
+              _OtpVerificationPanel(
+                otpController: _otpController,
+                otpSent: _otpSent,
+                phoneVerified: _phoneVerified,
+                sendingOtp: _sendingOtp,
+                verifyingOtp: _verifyingOtp,
+                statusMessage: _otpStatusMessage,
+                onSendOtp: _sendOtp,
+                onVerifyOtp: _verifyOtp,
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _role,
+                decoration: const InputDecoration(
+                  labelText: 'Role',
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(
+                      value: 'Volunteer', child: Text('Volunteer')),
+                  DropdownMenuItem(value: 'Muazzin', child: Text('Muazzin')),
+                  DropdownMenuItem(value: 'Imam', child: Text('Imam')),
+                ],
+                onChanged: (value) => setState(() => _role = value ?? _role),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _cityController,
+                      decoration: const InputDecoration(
+                        labelText: 'City',
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: _required,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _areaController,
+                      decoration: const InputDecoration(
+                        labelText: 'Area',
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: _required,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _maslak,
+                decoration: const InputDecoration(
+                  labelText: 'Maslak / Prayer Method',
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: 'Not specified',
+                    child: Text('Not specified'),
+                  ),
+                  DropdownMenuItem(value: 'Barelvi', child: Text('Barelvi')),
+                  DropdownMenuItem(value: 'Deobandi', child: Text('Deobandi')),
+                  DropdownMenuItem(
+                    value: 'Ahl-e-Hadees',
+                    child: Text('Ahl-e-Hadees'),
+                  ),
+                  DropdownMenuItem(value: 'Shia', child: Text('Shia')),
+                  DropdownMenuItem(value: 'Other', child: Text('Other')),
+                ],
+                onChanged: (value) =>
+                    setState(() => _maslak = value ?? _maslak),
+              ),
+              const SizedBox(height: 16),
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'existing', label: Text('Existing')),
+                  ButtonSegment(value: 'new', label: Text('New mosque')),
+                ],
+                selected: {_mosqueMode},
+                onSelectionChanged: (values) {
+                  setState(() => _mosqueMode = values.first);
+                },
+              ),
+              const SizedBox(height: 12),
+              if (_mosqueMode == 'existing')
+                DropdownButtonFormField<Mosque>(
+                  initialValue: _selectedMosque,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Select mosque',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: sampleMosques.take(80).map((mosque) {
+                    return DropdownMenuItem(
+                      value: mosque,
+                      child: Text(
+                        '${mosque.name} - ${mosque.area}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    setState(() => _selectedMosque = value);
+                  },
+                )
+              else ...[
+                TextFormField(
+                  controller: _newMosqueController,
+                  decoration: const InputDecoration(
+                    labelText: 'New mosque name',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: _mosqueMode == 'new' ? _required : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _addressController,
+                  decoration: const InputDecoration(
+                    labelText: 'Address / landmark',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: _mosqueMode == 'new' ? _required : null,
+                ),
+              ],
+              const SizedBox(height: 20),
+              Text(
+                'Namaz timings',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+              ),
+              const SizedBox(height: 10),
+              _TimingInputGrid(
+                fajrController: _fajrController,
+                zoharController: _zoharController,
+                asrController: _asrController,
+                maghribController: _maghribController,
+                ishaController: _ishaController,
+                jumaController: _jumaController,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Eid Namaz timings',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 4),
+              const Text('Eid timings are annual — update once a year.', style: TextStyle(color: Colors.black54, fontSize: 12)),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(child: InkWell(
+                  onTap: () async {
+                    final p = await showTimePicker(context: context, initialTime: TimeOfDay.now(), helpText: 'Eid ul Fitr',
+                      builder: (context, child) => MediaQuery(data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false), child: child!));
+                    if (p != null) _eidUlFitrController.text = p.hour.toString().padLeft(2,'0') + ':' + p.minute.toString().padLeft(2,'0');
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: InputDecorator(
+                    decoration: const InputDecoration(labelText: 'Eid ul Fitr', border: OutlineInputBorder(), suffixIcon: Icon(Icons.access_time)),
+                    child: ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: _eidUlFitrController,
+                      builder: (context, value, _) => Text(value.text.isEmpty ? 'Tap to set' : formatStoredTime(value.text),
+                        style: TextStyle(color: value.text.isEmpty ? Colors.black38 : Colors.black87, fontSize: 15)),
+                    ),
+                  ),
+                )),
+                const SizedBox(width: 10),
+                Expanded(child: InkWell(
+                  onTap: () async {
+                    final p = await showTimePicker(context: context, initialTime: TimeOfDay.now(), helpText: 'Eid ul Azha',
+                      builder: (context, child) => MediaQuery(data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false), child: child!));
+                    if (p != null) _eidUlAzhaController.text = p.hour.toString().padLeft(2,'0') + ':' + p.minute.toString().padLeft(2,'0');
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: InputDecorator(
+                    decoration: const InputDecoration(labelText: 'Eid ul Azha', border: OutlineInputBorder(), suffixIcon: Icon(Icons.access_time)),
+                    child: ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: _eidUlAzhaController,
+                      builder: (context, value, _) => Text(value.text.isEmpty ? 'Tap to set' : formatStoredTime(value.text),
+                        style: TextStyle(color: value.text.isEmpty ? Colors.black38 : Colors.black87, fontSize: 15)),
+                    ),
+                  ),
+                )),
+              ]),
+              const SizedBox(height: 18),
+              FilledButton.icon(
+                onPressed: _submitting ? null : _submit,
+                icon: const Icon(Icons.send),
+                label:
+                    Text(_submitting ? 'Submitting...' : 'Submit update'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String? _required(String? value) {
+    if (value == null || value.trim().isEmpty) return 'Required';
+    return null;
+  }
+
+  Future<void> _ensureFirebase() async {
+    if (_firebaseReady) return;
+    await Firebase.initializeApp();
+    _firebaseReady = true;
+  }
+
+  Future<void> _sendOtp() async {
+    final digits = _phoneController.text.replaceAll(RegExp(r'\D'), '');
+    final isValidIndianNumber =
+        digits.length == 10 || (digits.length == 12 && digits.startsWith('91'));
+    if (!isValidIndianNumber) {
+      setState(() => _otpStatusMessage = 'Enter a valid 10 digit mobile number.');
+      return;
+    }
+
+    setState(() {
+      _sendingOtp = true;
+      _otpStatusMessage = 'Sending OTP...';
+    });
+
+    try {
+      await _ensureFirebase();
+      await FirebaseAuth.instance.verifyPhoneNumber(
+        phoneNumber: _normalizedIndianPhone(),
+        verificationCompleted: (credential) async {
+          await FirebaseAuth.instance.signInWithCredential(credential);
+          if (!mounted) return;
+          setState(() {
+            _phoneVerified = true;
+            _otpSent = true;
+            _otpStatusMessage = 'Mobile number verified.';
+          });
+        },
+        verificationFailed: (error) {
+          if (!mounted) return;
+          setState(() {
+            _otpStatusMessage =
+                error.message ?? 'OTP failed. Check Firebase setup.';
+          });
+        },
+        codeSent: (verificationId, resendToken) {
+          if (!mounted) return;
+          setState(() {
+            _verificationId = verificationId;
+            _otpSent = true;
+            _otpStatusMessage = 'OTP sent. Enter code to verify.';
+          });
+        },
+        codeAutoRetrievalTimeout: (verificationId) {
+          _verificationId = verificationId;
+        },
+        timeout: const Duration(seconds: 60),
+      );
+    } catch (_) {
+      setState(() {
+        _otpStatusMessage =
+            'Firebase is not configured yet. Add google-services.json and enable Phone Auth.';
+      });
+    } finally {
+      if (mounted) setState(() => _sendingOtp = false);
+    }
+  }
+
+  Future<void> _verifyOtp() async {
+    if (_verificationId == null || _otpController.text.trim().isEmpty) {
+      setState(() => _otpStatusMessage = 'Enter the OTP code.');
+      return;
+    }
+
+    setState(() {
+      _verifyingOtp = true;
+      _otpStatusMessage = null;
+    });
+
+    try {
+      final credential = PhoneAuthProvider.credential(
+        verificationId: _verificationId!,
+        smsCode: _otpController.text.trim(),
+      );
+      await FirebaseAuth.instance.signInWithCredential(credential);
+      if (!mounted) return;
+      setState(() {
+        _phoneVerified = true;
+        _otpStatusMessage = 'Mobile number verified.';
+      });
+    } on FirebaseAuthException catch (error) {
+      setState(() {
+        _otpStatusMessage = error.message ?? 'Invalid OTP.';
+      });
+    } finally {
+      if (mounted) setState(() => _verifyingOtp = false);
+    }
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (!_phoneVerified) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Verify mobile number with OTP first.')),
+      );
+      return;
+    }
+
+    setState(() => _submitting = true);
+    final mosqueName = _mosqueMode == 'existing'
+        ? _selectedMosque?.name ?? 'Selected mosque'
+        : _newMosqueController.text.trim();
+
+    try {
+      await _ensureFirebase();
+      final db = FirebaseFirestore.instance;
+      final submittedTimings = <String, String>{
+        if (normalizeTimingInput(_fajrController.text) != null)
+          'fajr': normalizeTimingInput(_fajrController.text)!,
+        if (normalizeTimingInput(_zoharController.text) != null)
+          'zohar': normalizeTimingInput(_zoharController.text)!,
+        if (normalizeTimingInput(_asrController.text) != null)
+          'asr': normalizeTimingInput(_asrController.text)!,
+        if (normalizeTimingInput(_maghribController.text) != null)
+          'maghrib': normalizeTimingInput(_maghribController.text)!,
+        if (normalizeTimingInput(_ishaController.text) != null)
+          'isha': normalizeTimingInput(_ishaController.text)!,
+        if (normalizeTimingInput(_jumaController.text) != null)
+          'juma': normalizeTimingInput(_jumaController.text)!,
+        if (normalizeTimingInput(_eidUlFitrController.text) != null)
+          'eid_ul_fitr': normalizeTimingInput(_eidUlFitrController.text)!,
+        if (normalizeTimingInput(_eidUlAzhaController.text) != null)
+          'eid_ul_azha': normalizeTimingInput(_eidUlAzhaController.text)!,
+      };
+      if (submittedTimings.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter at least one namaz timing.')),
+        );
+        setState(() => _submitting = false);
+        return;
+      }
+
+      final timingData = {
+        'timing_verified_by_name': _nameController.text.trim(),
+        'timing_verified_by_phone': _normalizedIndianPhone(),
+        'timing_verification_status': 'source_verified',
+        'role': _role,
+        'maslak': _maslak,
+        'city': _cityController.text.trim(),
+        'area': _areaController.text.trim(),
+        'timing_updated_at': FieldValue.serverTimestamp(),
+        if (_selectedMosque?.placeId != null) 'place_id': _selectedMosque!.placeId!,
+      };
+
+      if (_mosqueMode == 'existing' && _selectedMosque != null) {
+        // Existing mosque — query by name and update
+        final query = await db
+            .collection('mosques')
+            .where('name', isEqualTo: mosqueName)
+            .limit(1)
+            .get();
+        final updateData = {
+          ...timingData,
+          for (final entry in submittedTimings.entries)
+            'timings.${entry.key}': entry.value,
+        };
+        if (query.docs.isNotEmpty) {
+          await query.docs.first.reference.update(updateData);
+        } else {
+          // Not found in Firestore yet — create it
+          await db.collection('mosques').add({
+            'name': mosqueName,
+            'address': _selectedMosque?.address ?? '',
+            'latitude': _selectedMosque?.latitude,
+            'longitude': _selectedMosque?.longitude,
+            'timings': submittedTimings,
+            ...timingData,
+          });
+        }
+      } else {
+        // New mosque — create document
+        await db.collection('mosques').add({
+          'name': mosqueName,
+          'address': _addressController.text.trim(),
+          'timings': submittedTimings,
+          ...timingData,
+        });
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$mosqueName updated successfully! ✅')),
+      );
+      Navigator.of(context).pop();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not submit. Check Firebase setup and internet.'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  String _normalizedIndianPhone() {
+    final digits = _phoneController.text.replaceAll(RegExp(r'\D'), '');
+    if (digits.startsWith('91') && digits.length == 12) return '+$digits';
+    return '+91$digits';
+  }
+}
+
+class _OtpVerificationPanel extends StatelessWidget {
+  const _OtpVerificationPanel({
+    required this.otpController,
+    required this.otpSent,
+    required this.phoneVerified,
+    required this.sendingOtp,
+    required this.verifyingOtp,
+    required this.statusMessage,
+    required this.onSendOtp,
+    required this.onVerifyOtp,
+  });
+
+  final TextEditingController otpController;
+  final bool otpSent;
+  final bool phoneVerified;
+  final bool sendingOtp;
+  final bool verifyingOtp;
+  final String? statusMessage;
+  final VoidCallback onSendOtp;
+  final VoidCallback onVerifyOtp;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF7F3),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                phoneVerified ? Icons.verified : Icons.sms,
+                color: const Color(0xFF0F7C68),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  phoneVerified ? 'Mobile verified' : 'OTP verification',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              FilledButton.icon(
+                onPressed: sendingOtp || phoneVerified ? null : onSendOtp,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF0F7C68),
+                  disabledBackgroundColor: Colors.black26,
+                  foregroundColor: Colors.white,
+                  disabledForegroundColor: Colors.white70,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                ),
+                icon: sendingOtp
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.send_to_mobile),
+                label: Text(
+                  sendingOtp
+                      ? 'Sending...'
+                      : otpSent
+                          ? 'Resend OTP'
+                          : 'Send OTP',
+                ),
+              ),
+            ],
+          ),
+          if (otpSent && !phoneVerified) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: otpController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'OTP code',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: verifyingOtp ? null : onVerifyOtp,
+                  child: Text(verifyingOtp ? 'Checking...' : 'Verify'),
+                ),
+              ],
+            ),
+          ],
+          if (statusMessage != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              statusMessage!,
+              style: TextStyle(
+                color: phoneVerified ? const Color(0xFF0F7C68) : Colors.black54,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TimingInputGrid extends StatefulWidget {
+  const _TimingInputGrid({
+    required this.fajrController,
+    required this.zoharController,
+    required this.asrController,
+    required this.maghribController,
+    required this.ishaController,
+    required this.jumaController,
+  });
+
+  final TextEditingController fajrController;
+  final TextEditingController zoharController;
+  final TextEditingController asrController;
+  final TextEditingController maghribController;
+  final TextEditingController ishaController;
+  final TextEditingController jumaController;
+
+  @override
+  State<_TimingInputGrid> createState() => _TimingInputGridState();
+}
+
+class _TimingInputGridState extends State<_TimingInputGrid> {
+  Future<void> _pick(BuildContext ctx, TextEditingController ctrl, String label) async {
+    final p = await showTimePicker(
+      context: ctx,
+      initialTime: TimeOfDay.now(),
+      helpText: label,
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+        child: child!,
+      ),
+    );
+    if (p != null) {
+      ctrl.text = p.hour.toString().padLeft(2,'0') + ':' + p.minute.toString().padLeft(2,'0');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fields = [
+      ('Fajr', widget.fajrController),
+      ('Zohar', widget.zoharController),
+      ('Asr', widget.asrController),
+      ('Maghrib', widget.maghribController),
+      ('Isha', widget.ishaController),
+      ('Juma', widget.jumaController),
+    ];
+
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: fields.length,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisExtent: 76,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+      ),
+      itemBuilder: (context, index) {
+        final field = fields[index];
+        return InkWell(
+          onTap: () => _pick(context, field.$2, field.$1),
+          borderRadius: BorderRadius.circular(8),
+          child: InputDecorator(
+            decoration: InputDecoration(
+              labelText: field.$1,
+              border: const OutlineInputBorder(),
+              suffixIcon: const Icon(Icons.access_time),
+            ),
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: field.$2,
+              builder: (context, value, _) => Text(
+                value.text.isEmpty ? 'Tap to set' : formatStoredTime(value.text),
+                style: TextStyle(
+                  color: value.text.isEmpty ? Colors.black38 : Colors.black87,
+                  fontSize: 15,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LocationPanel extends StatelessWidget {
+  const _LocationPanel({
+    required this.radiusKm,
+    required this.loadingLocation,
+    required this.isCurrentLocation,
+    required this.onRefreshLocation,
+    required this.onRadiusChanged,
+    required this.cityName,
+  });
+
+  final int radiusKm;
+  final bool loadingLocation;
+  final bool isCurrentLocation;
+  final VoidCallback onRefreshLocation;
+  final ValueChanged<int> onRadiusChanged;
+  final String cityName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF7F3),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.my_location, color: Color(0xFF0F7C68)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  loadingLocation
+                      ? 'Finding your location...'
+                      : isCurrentLocation
+                          ? 'Nearest masjids from your location'
+                          : cityName + ' masjid list',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Refresh location',
+                onPressed: onRefreshLocation,
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<int>(
+              segments: const [
+                ButtonSegment(value: 2, label: Text('2 km')),
+                ButtonSegment(value: 10, label: Text('10 km')),
+                ButtonSegment(value: 25, label: Text('All')),
+              ],
+              selected: {radiusKm},
+              onSelectionChanged: (values) => onRadiusChanged(values.first),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NamazFilter extends StatelessWidget {
+  const _NamazFilter({
+    required this.selectedNamaz,
+    required this.onSelected,
+  });
+
+  final String selectedNamaz;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final options = {
+      'all': 'All',
+      'fajr': 'Fajr',
+      'zohar': 'Zohar',
+      'asr': 'Asr',
+      'maghrib': 'Maghrib',
+      'isha': 'Isha',
+      'juma': 'Juma',
+      'eid': 'Eid',
+    };
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: options.entries.map((entry) {
+        return ChoiceChip(
+          label: Text(entry.value),
+          selected: selectedNamaz == entry.key,
+          onSelected: (_) => onSelected(entry.key),
+        );
+      }).toList(),
+    );
+  }
+}
+
+class _MosqueCard extends StatelessWidget {
+  const _MosqueCard({required this.result});
+
+  final MosqueResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final mosque = result.mosque;
+    final next = result.nextJamaat;
+    final sourcePhone = mosque.timingVerifiedByPhone;
+    final statusText = mosque.timingVerificationStatus == 'source_verified'
+        ? 'Timing source: ${mosque.timingVerifiedByName ?? 'verified source'}${sourcePhone == null ? '' : ' • $sourcePhone'}'
+        : 'Timing pending';
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: const BorderSide(color: Color(0xFFE0E0E0)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    mosque.name,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                if (mosque.isVerified)
+                  const Icon(Icons.verified, color: Color(0xFF0F7C68)),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text('${mosque.area} - ${_distanceLabel(mosque)}'),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8F5EC),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      next == null
+                          ? 'Namaz timing pending'
+                          : '${_title(next.namaz)} jamaat ${formatStoredTime(next.time)}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  if (next != null) Text('in ${next.startsIn}'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                _TimingLabel(label: 'Fajr', value: mosque.timings.fajr),
+                _TimingLabel(label: 'Zohar', value: mosque.timings.zohar),
+                _TimingLabel(label: 'Asr', value: mosque.timings.asr),
+                _TimingLabel(label: 'Maghrib', value: mosque.timings.maghrib),
+                _TimingLabel(label: 'Isha', value: mosque.timings.isha),
+                _TimingLabel(label: 'Juma', value: mosque.timings.juma),
+                if (mosque.timings.eidUlFitr != null)
+                  _TimingLabel(label: 'Eid ul Fitr', value: mosque.timings.eidUlFitr),
+                if (mosque.timings.eidUlAzha != null)
+                  _TimingLabel(label: 'Eid ul Azha', value: mosque.timings.eidUlAzha),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SizedBox(
+                  width: MediaQuery.sizeOf(context).width - 120,
+                  child: Text(
+                    statusText,
+                    style: const TextStyle(fontSize: 12, color: Colors.black54),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (sourcePhone != null) ...[
+                  IconButton.filledTonal(
+                    tooltip: 'WhatsApp source',
+                    onPressed: () => _openWhatsApp(sourcePhone),
+                    icon: const Icon(Icons.chat),
+                  ),
+                  IconButton.filledTonal(
+                    tooltip: 'Call source',
+                    onPressed: () => _callPhone(sourcePhone),
+                    icon: const Icon(Icons.call),
+                  ),
+                ],
+                FilledButton.icon(
+                  onPressed:
+                      mosque.hasCoordinates ? () => _openMaps(mosque) : null,
+                  icon: const Icon(Icons.navigation),
+                  label: const Text('Navigate'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => SuggestEditScreen(mosque: mosque)),
+                  ),
+                  icon: const Icon(Icons.edit_note, size: 18),
+                  label: const Text('Suggest edit'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _distanceLabel(Mosque mosque) {
+    if (!mosque.hasCoordinates) return 'location pending';
+    final meters = mosque.distanceMeters;
+    if (meters < 1000) return '${meters}m';
+    return '${(meters / 1000).toStringAsFixed(1)} km';
+  }
+
+  static String _title(String value) {
+    return value[0].toUpperCase() + value.substring(1);
+  }
+
+  static Future<void> _openMaps(Mosque mosque) async {
+    final uri = Uri.parse(
+      'https://www.google.com/maps/dir/?api=1&destination=${mosque.latitude},${mosque.longitude}',
+    );
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  static Future<void> _openWhatsApp(String phone) async {
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    final uri = Uri.parse('https://wa.me/$digits');
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  static Future<void> _callPhone(String phone) async {
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    final uri = Uri.parse('tel:+$digits');
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+}
+
+class _TimingLabel extends StatelessWidget {
+  const _TimingLabel({required this.label, required this.value});
+
+  final String label;
+  final String? value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      '$label ${value == null ? '-' : formatStoredTime(value!)}',
+      style: const TextStyle(fontWeight: FontWeight.w600),
+    );
+  }
+}
+
+String formatStoredTime(String value) {
+  final parts = value.split(':');
+  if (parts.length < 2) return value;
+  final hour = int.tryParse(parts[0]);
+  final minute = int.tryParse(parts[1]);
+  if (hour == null || minute == null) return value;
+  final period = hour >= 12 ? 'PM' : 'AM';
+  final hour12 = hour % 12 == 0 ? 12 : hour % 12;
+  return '$hour12:${minute.toString().padLeft(2, '0')} $period';
+}
+
+String? normalizeTimingInput(String value) {
+  final text = value.trim().toUpperCase().replaceAll('.', '');
+  if (text.isEmpty) return null;
+
+  final match = RegExp(r'^(\d{1,2})(?::(\d{1,2}))?\s*(AM|PM)?$')
+      .firstMatch(text);
+  if (match == null) return text;
+
+  var hour = int.tryParse(match.group(1)!);
+  final minute = int.tryParse(match.group(2) ?? '0');
+  final period = match.group(3);
+  if (hour == null || minute == null) return text;
+  if (minute < 0 || minute > 59) return text;
+
+  if (period != null) {
+    if (hour < 1 || hour > 12) return text;
+    if (period == 'AM') {
+      hour = hour == 12 ? 0 : hour;
+    } else {
+      hour = hour == 12 ? 12 : hour + 12;
+    }
+  } else if (hour >= 1 && hour <= 6) {
+    // No AM/PM given, hour 1-6 = likely PM (Zohar/Asr/Maghrib/Isha)
+    hour = hour + 12;
+  } else if (hour < 0 || hour > 23) {
+    return text;
+  }
+
+  return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+}
+
+
+class _MosqueSearchDelegate extends SearchDelegate<String> {
+  _MosqueSearchDelegate({required this.results});
+  final List<MosqueResult> results;
+
+  @override
+  String get searchFieldLabel => 'Search mosque...';
+
+  @override
+  List<Widget> buildActions(BuildContext context) => [
+    if (query.isNotEmpty)
+      IconButton(icon: const Icon(Icons.clear), onPressed: () => query = ''),
+  ];
+
+  @override
+  Widget buildLeading(BuildContext context) =>
+    IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => close(context, ''));
+
+  @override
+  Widget buildResults(BuildContext context) => _buildList();
+
+  @override
+  Widget buildSuggestions(BuildContext context) => _buildList();
+
+  Widget _buildList() {
+    final q = query.toLowerCase();
+    final filtered = results.where((r) =>
+      r.mosque.name.toLowerCase().contains(q) ||
+      r.mosque.area.toLowerCase().contains(q) ||
+      r.mosque.address.toLowerCase().contains(q)
+    ).toList();
+
+    if (filtered.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Text('No mosque found.', style: TextStyle(color: Colors.black54)),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(12),
+      itemCount: filtered.length,
+      itemBuilder: (context, index) {
+        final mosque = filtered[index].mosque;
+        return ListTile(
+          leading: const Icon(Icons.mosque, color: Color(0xFF0F7C68)),
+          title: Text(mosque.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+          subtitle: Text(mosque.area),
+          trailing: Text(
+            mosque.distanceMeters < 1000
+              ? '${mosque.distanceMeters}m'
+              : '${(mosque.distanceMeters/1000).toStringAsFixed(1)}km',
+            style: const TextStyle(color: Colors.black54, fontSize: 12),
+          ),
+          onTap: () => close(context, mosque.name),
+        );
+      },
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 40),
+      child: Center(
+        child: Text('No masjid found in this radius.'),
+      ),
+    );
+  }
+}
