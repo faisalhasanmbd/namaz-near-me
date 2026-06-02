@@ -181,14 +181,17 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
         timeout: const Duration(seconds: 60),
       );
     } catch (_) {
-      setState(() => _otpStatus = 'OTP failed. Please try again.');
+      if (mounted) setState(() => _otpStatus = 'OTP failed. Please try again.');
     } finally {
       if (mounted) setState(() => _sendingOtp = false);
     }
   }
 
+  bool _verifyingOtp = false;
+
   Future<void> _verifyOtp() async {
     if (_verificationId == null || _otpController.text.trim().isEmpty) return;
+    if (mounted) setState(() => _verifyingOtp = true);
     try {
       final cred = PhoneAuthProvider.credential(
           verificationId: _verificationId!,
@@ -200,9 +203,9 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
       }
       await _markPhoneVerified(phone);
     } catch (_) {
-      if (mounted) {
-        setState(() => _otpStatus = 'Invalid OTP. Please try again.');
-      }
+      if (mounted) setState(() => _otpStatus = 'Invalid OTP. Please try again.');
+    } finally {
+      if (mounted) setState(() => _verifyingOtp = false);
     }
   }
 
@@ -864,8 +867,9 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
                           ),
                           const SizedBox(width: 8),
                           FilledButton(
-                              onPressed: _verifyOtp,
-                              child: const Text('Verify')),
+                              onPressed: _verifyingOtp ? null : _verifyOtp,
+                              child: Text(
+                                  _verifyingOtp ? 'Checking...' : 'Verify')),
                         ]),
                       ],
                       if (_otpStatus != null) ...[

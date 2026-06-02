@@ -1950,10 +1950,12 @@ class _ContributorSignupScreenState extends State<ContributorSignupScreen> {
         timeout: const Duration(seconds: 60),
       );
     } catch (_) {
-      setState(() {
-        _otpStatusMessage =
-            'Firebase is not configured yet. Add google-services.json and enable Phone Auth.';
-      });
+      if (mounted) {
+        setState(() {
+          _otpStatusMessage =
+              'Firebase is not configured yet. Add google-services.json and enable Phone Auth.';
+        });
+      }
     } finally {
       if (mounted) setState(() => _sendingOtp = false);
     }
@@ -4403,10 +4405,11 @@ class _MosqueCard extends StatelessWidget {
                       }
                       final jamaat =
                           _nextDateTimeForStoredTime(selectedNamaz, storedTime);
-                      final id =
-                          (_mosqueKey(mosque.name).hashCode.abs() % 100000) +
-                              selectedNamaz.hashCode.abs() % 1000 +
-                              before;
+                      final id = Object.hash(
+                              _mosqueKey(mosque.name),
+                              selectedNamaz,
+                              before)
+                          .abs() % 2147483647;
                       try {
                         await NotificationService.instance
                             .schedulePrayerReminder(
