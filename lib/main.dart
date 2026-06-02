@@ -516,8 +516,9 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
       date: lookupDate,
       dayAdjustment: adjustment,
     );
+    if (correctedHijri == null) return;
     final monthKey = _hijriMonthKey(correctedHijri);
-    if (correctedHijri == null || monthKey == null) return;
+    if (monthKey == null) return;
     await FirebaseFirestore.instance
         .collection('islamic_date_city')
         .doc(_cityDateKey(_selectedCity.name))
@@ -1361,6 +1362,8 @@ NamazTiming _mergeTimings(
 }
 
 Mosque _withAutoCalendarMaghrib(Mosque mosque, String maghribJamaat) {
+  // Only use auto-calculated Maghrib if no manual timing has been set
+  if (mosque.timings.maghrib != null) return mosque;
   final normalizedMaghrib =
       normalizePrayerTimingInput('maghrib', maghribJamaat) ?? maghribJamaat;
   final timings = mosque.timings;
@@ -1679,13 +1682,8 @@ class _ContributorSignupScreenState extends State<ContributorSignupScreen> {
                 onSelectionChanged: (values) {
                   setState(() {
                     _mosqueMode = values.first;
-                    if (_mosqueMode == 'new') {
-                      _selectedMosque = null;
-                      _areaController.clear();
-                    } else {
-                      _selectedMosque = null;
-                      _areaController.clear();
-                    }
+                    _selectedMosque = null;
+                    _areaController.clear();
                   });
                 },
               ),
@@ -2299,9 +2297,12 @@ class _MosquePickerSheetState extends State<_MosquePickerSheet> {
                       separatorBuilder: (_, __) => const Divider(height: 1),
                       itemBuilder: (context, index) {
                         final mosque = _filtered[index];
-                        final selected =
-                            mosque.name == widget.selectedMosque?.name &&
-                                mosque.area == widget.selectedMosque?.area;
+                        final sel = widget.selectedMosque;
+                        final selected = sel != null &&
+                            ((mosque.placeId != null &&
+                                    mosque.placeId == sel.placeId) ||
+                                (mosque.name == sel.name &&
+                                    mosque.area == sel.area));
                         return ListTile(
                           leading: Icon(
                             selected ? Icons.check_circle : Icons.mosque,
@@ -2602,7 +2603,7 @@ class _RewardsScreenState extends State<RewardsScreen> {
   @override
   void initState() {
     super.initState();
-    widget.onBackfill();
+    widget.onBackfill().ignore();
   }
 
   @override
@@ -4394,22 +4395,33 @@ class _MosqueCard extends StatelessWidget {
                           (_mosqueKey(mosque.name).hashCode.abs() % 100000) +
                               selectedNamaz.hashCode.abs() % 1000 +
                               before;
-                      await NotificationService.instance.schedulePrayerReminder(
-                        id: id,
-                        mosqueName: mosque.name,
-                        namaz: _title(selectedNamaz),
-                        jamaatTime: jamaat,
-                        beforeMinutes: before,
-                      );
-                      if (context.mounted) {
-                        Navigator.of(context).pop();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Reminder set: ${_title(selectedNamaz)} ${formatPrayerStoredTime(selectedNamaz, storedTime)} ($before min before)',
-                            ),
-                          ),
+                      try {
+                        await NotificationService.instance
+                            .schedulePrayerReminder(
+                          id: id,
+                          mosqueName: mosque.name,
+                          namaz: _title(selectedNamaz),
+                          jamaatTime: jamaat,
+                          beforeMinutes: before,
                         );
+                        if (context.mounted) {
+                          Navigator.of(context).pop();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Reminder set: ${_title(selectedNamaz)} ${formatPrayerStoredTime(selectedNamaz, storedTime)} ($before min before)',
+                              ),
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                                content: Text(
+                                    'Reminder nahi lag saka. Please try again. ($e)')),
+                          );
+                        }
                       }
                     },
                     child: const Text('Set Reminder'),

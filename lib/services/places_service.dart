@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
-const _apiKey = 'AIzaSyA-YYAALuAm8viXXAYUpFepZo4HCC0bkc0';
+const _apiKey = String.fromEnvironment('GOOGLE_PLACES_API_KEY', defaultValue: '');
 
 class PlacesMosque {
   const PlacesMosque({
@@ -27,6 +27,12 @@ class PlacesService {
     required double longitude,
     int radiusMeters = 10000,
   }) async {
+    if (_apiKey.isEmpty) {
+      debugPrint(
+        'PlacesService disabled: GOOGLE_PLACES_API_KEY not provided via --dart-define.',
+      );
+      return [];
+    }
     final url = Uri.parse('https://places.googleapis.com/v1/places:searchNearby');
     final body = json.encode({
       'includedTypes': ['mosque'],
@@ -64,17 +70,25 @@ class PlacesService {
       final data = json.decode(response.body);
       final results = data['places'] as List? ?? [];
 
-      return results.map((place) {
-        final loc = place['location'];
-        return PlacesMosque(
-          placeId: place['id'] ?? '',
-          name: place['displayName']?['text'] ?? 'Mosque',
-          address: place['formattedAddress'] ?? '',
-          latitude: (loc['latitude'] as num).toDouble(),
-          longitude: (loc['longitude'] as num).toDouble(),
-          rating: (place['rating'] as num?)?.toDouble(),
-        );
-      }).toList();
+      return results
+          .where((place) {
+            final loc = place['location'];
+            return loc != null &&
+                loc['latitude'] != null &&
+                loc['longitude'] != null;
+          })
+          .map((place) {
+            final loc = place['location'];
+            return PlacesMosque(
+              placeId: place['id'] ?? '',
+              name: place['displayName']?['text'] ?? 'Mosque',
+              address: place['formattedAddress'] ?? '',
+              latitude: (loc['latitude'] as num).toDouble(),
+              longitude: (loc['longitude'] as num).toDouble(),
+              rating: (place['rating'] as num?)?.toDouble(),
+            );
+          })
+          .toList();
     } catch (e) {
       debugPrint('Places error: $e');
       return [];

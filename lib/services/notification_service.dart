@@ -15,8 +15,12 @@ class NotificationService {
   Future<void> initialize() async {
     if (_initialized) return;
     tz.initializeTimeZones();
-    final tzInfo = await FlutterTimezone.getLocalTimezone();
-    tz.setLocalLocation(tz.getLocation(tzInfo.identifier));
+    try {
+      final tzInfo = await FlutterTimezone.getLocalTimezone();
+      tz.setLocalLocation(tz.getLocation(tzInfo.identifier));
+    } catch (_) {
+      tz.setLocalLocation(tz.getLocation('Asia/Kolkata'));
+    }
 
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings();

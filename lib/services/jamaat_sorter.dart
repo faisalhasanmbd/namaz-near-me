@@ -5,9 +5,11 @@ const namazOrder = ['fajr', 'zohar', 'asr', 'maghrib', 'isha'];
 int? _timeToMinutes(String? value) {
   if (value == null || !value.contains(':')) return null;
   final parts = value.split(':');
-  final hours = int.tryParse(parts[0]);
-  final minutes = int.tryParse(parts[1]);
+  final hours = int.tryParse(parts[0].trim());
+  // Strip any trailing AM/PM or spaces from minutes part
+  final minutes = int.tryParse(parts[1].trim().replaceAll(RegExp(r'[^0-9]'), ''));
   if (hours == null || minutes == null) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
   return hours * 60 + minutes;
 }
 
@@ -70,10 +72,6 @@ List<MosqueResult> sortMosquesForUser(
   }).toList();
 
   results.sort((a, b) {
-    final byDistance =
-        a.mosque.distanceMeters.compareTo(b.mosque.distanceMeters);
-    if (byDistance != 0) return byDistance;
-
     final aNext = a.nextJamaat;
     final bNext = b.nextJamaat;
 
@@ -84,6 +82,10 @@ List<MosqueResult> sortMosquesForUser(
       final byTime = aNext.minutesUntil.compareTo(bNext.minutesUntil);
       if (byTime != 0) return byTime;
     }
+
+    final byDistance =
+        a.mosque.distanceMeters.compareTo(b.mosque.distanceMeters);
+    if (byDistance != 0) return byDistance;
 
     final byUpdated =
         b.mosque.timingUpdatedAt.compareTo(a.mosque.timingUpdatedAt);
