@@ -68,12 +68,13 @@ class NotificationService {
 
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
-        'namaz_reminders_custom_v3',
-        'Namaz Reminders',
-        channelDescription: 'Reminders before jamaat time',
+        'namaz_reminders_v4',
+        'Namaz Prayer Reminders',
+        channelDescription: 'Alerts before jamaat time — keep as High/Urgent',
         importance: Importance.max,
         priority: Priority.high,
         playSound: true,
+        enableVibration: true,
         sound: RawResourceAndroidNotificationSound('namaz_reminder'),
       ),
       iOS: DarwinNotificationDetails(
