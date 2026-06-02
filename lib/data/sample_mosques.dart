@@ -5,6 +5,7 @@ import '../models/mosque.dart';
 final sampleMosques = <Mosque>[
   Mosque(
     name: "Masjid Sheikh Zakariya",
+    city: "Moradabad",
     area: "Karula",
     address: "Gali Near Sultan Hospital, Moradabad, Uttar Pradesh 244001",
     latitude: 28.80971,
@@ -26,6 +27,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Imam Abul Yusuf",
+    city: "Moradabad",
     area: "Karula",
     address: "Humrahi Shadi Hall Ke Peeche, Moradabad, Uttar Pradesh 244001",
     latitude: null,
@@ -47,6 +49,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Masoom",
+    city: "Moradabad",
     area: "Karula",
     address: "Tariq Nagar, Moradabad, Uttar Pradesh 244001",
     latitude: null,
@@ -68,6 +71,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madni Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Kamil Estate, Sambhal Road, Moradabad, Uttar Pradesh 244001",
     latitude: 28.809437689766,
@@ -89,6 +93,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Abuzar",
+    city: "Moradabad",
     area: "Karula",
     address: "Sabun Factory, Shafir Nagar, Moradabad, Uttar Pradesh 244001",
     latitude: 28.814083857313,
@@ -110,6 +115,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Bagdadi Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Gali No. 8, Moradabad, Uttar Pradesh 244001",
     latitude: null,
@@ -131,6 +137,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Muaz Bin Jabl",
+    city: "Moradabad",
     area: "Karula",
     address: "Bhadora Village, Sabun Factory, Moradabad, Uttar Pradesh 244001",
     latitude: 28.814083857313,
@@ -152,6 +159,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Rashid Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Azad Nagar, Moradabad, Uttar Pradesh 244001",
     latitude: 28.803392572539,
@@ -173,6 +181,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Malik",
+    city: "Moradabad",
     area: "Karula",
     address: "Gali A10, Akhbar Factory, Moradabad, Uttar Pradesh 244001",
     latitude: 28.809733144706,
@@ -194,6 +203,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Taj Ush Shariya",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Gali No. 2, Taj Colony, Sabun Factory, Moradabad, Uttar Pradesh 244001",
@@ -216,6 +226,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Khalid Bin Waleed",
+    city: "Moradabad",
     area: "Karula",
     address: "Azad Nagar, Moradabad, Uttar Pradesh 244001",
     latitude: 28.803392572539,
@@ -237,6 +248,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Khadijatul Qubra",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Sankalp School Road, Sabun Factory, Moradabad, Uttar Pradesh 244001",
@@ -259,6 +271,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Arqam",
+    city: "Moradabad",
     area: "Karula",
     address: "Maulana Abdul Jabbar Colony, Moradabad, Uttar Pradesh 244001",
     latitude: null,
@@ -280,6 +293,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Bilal Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Amtul Vihar Colony, Karula, Moradabad, Uttar Pradesh 244001",
     latitude: null,
@@ -301,6 +315,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Zakariya Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Lajpat Nagar 2, Moradabad, Uttar Pradesh 244001",
     latitude: 28.824503504406,
@@ -322,6 +337,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Aaisha Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Teacher Colony, Moradabad, Uttar Pradesh 244001",
     latitude: null,
@@ -343,6 +359,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Moti Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Akhbar Factory Road, Moradabad, Uttar Pradesh 244001",
     latitude: 28.809733144706,
@@ -364,6 +381,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madarsa Wadi E Huda",
+    city: "Moradabad",
     area: "Karula",
     address: "Shahidabad, Sambhal Road, Moradabad, Uttar Pradesh 244001",
     latitude: 28.809437689766,
@@ -385,6 +403,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Meba Brass Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Kohinoor Tiraha, Moradabad, Uttar Pradesh 244001",
     latitude: 28.8331428,
@@ -406,6 +425,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madina Masjid",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Yusuf Colony, Rehmat Nagar, Karula, Moradabad, Uttar Pradesh 244001",
@@ -428,6 +448,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Bhagh Shehzadi",
+    city: "Moradabad",
     area: "Karula",
     address: "Akhbar Factory, Moradabad, Uttar Pradesh 244001",
     latitude: 28.809733144706,
@@ -449,6 +470,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madarsa Darul Uloom Dineeya",
+    city: "Moradabad",
     area: "Karula",
     address: "Gali No. 8, Moradabad, Uttar Pradesh 244001",
     latitude: null,
@@ -470,6 +492,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Chappar Wali Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Rehmat Nagar, Gali No. 1, Moradabad, Uttar Pradesh 244001",
     latitude: 28.814083857313,
@@ -491,6 +514,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Mirajun Nabi Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Haji Yusuf Park Wali Gali, Moradabad, Uttar Pradesh 244001",
     latitude: null,
@@ -512,6 +536,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Abdul Aziz",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Near Ayyub Shadi Hall, Rehmat Nagar, Karula, Moradabad, Uttar Pradesh 244001",
@@ -534,6 +559,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Abdullah Ibney Masood",
+    city: "Moradabad",
     area: "Karula",
     address: "Jamila Colony, Sabun Factory, Moradabad, Uttar Pradesh 244001",
     latitude: 28.814083857313,
@@ -555,6 +581,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Rabiya",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Near Salim Chappal Wale, Akhbar Factory, Moradabad, Uttar Pradesh 244001",
@@ -577,6 +604,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Haashmi Yahya Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Shahidabad, Sambhal Road, Moradabad, Uttar Pradesh 244001",
     latitude: 28.809437689766,
@@ -598,6 +626,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Bahadur Shah",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Salim Chappal Walo Ki Gali Me Ander Jakar, Akhbar Factory, Moradabad, Uttar Pradesh 244001",
@@ -620,6 +649,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Noor Jamal Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Jayantipur, Karula, Moradabad, Uttar Pradesh 244001",
     latitude: null,
@@ -641,6 +671,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madarsa Sadarulla Fazil",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Near Salim Chappal Wale, Akhbar Factory, Moradabad, Uttar Pradesh 244001",
@@ -663,6 +694,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Imli Wali Masjid",
+    city: "Moradabad",
     area: "Rafatpura",
     address: "Kambal Ka Tazia, Rafatpura, Moradabad, Uttar Pradesh 244001",
     latitude: null,
@@ -684,6 +716,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Maidan Wali Masjid",
+    city: "Moradabad",
     area: "Rafatpura",
     address: "Rafatpura, Moradabad, Uttar Pradesh 244001",
     latitude: 28.835921,
@@ -705,6 +738,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Bagh Wali Masjid",
+    city: "Moradabad",
     area: "Shaukat Bagh",
     address: "Shaukat Bagh, Moradabad, Uttar Pradesh 244001",
     latitude: 28.8375691,
@@ -726,6 +760,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Bagh Wali Masjid",
+    city: "Moradabad",
     area: "Mufti Tola",
     address: "Mufti Tola, Moradabad, Uttar Pradesh 244001",
     latitude: 28.8375691,
@@ -747,6 +782,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madarsa Shahi",
+    city: "Moradabad",
     area: "Mandi Chowk",
     address: "Mandi Chowk, Moradabad, Uttar Pradesh 244001",
     latitude: 28.83230548094,
@@ -768,6 +804,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Jamia Qasmia Madrasa Shahi",
+    city: "Moradabad",
     area: "Lal Bagh",
     address: "Lal Bagh, Moradabad, Uttar Pradesh 244001",
     latitude: 28.8349913,
@@ -789,6 +826,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Yateem Khane Wali Masjid",
+    city: "Moradabad",
     area: "Faiz Ganj",
     address: "Chauraha Faiz Ganj, Moradabad, Uttar Pradesh 244001",
     latitude: 28.835501,
@@ -810,6 +848,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Ghair Wali Masjid",
+    city: "Moradabad",
     area: "Faiz Ganj",
     address: "Faiz Ganj, Moradabad, Uttar Pradesh 244001",
     latitude: 28.831137,
@@ -831,6 +870,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Pathano Wali Masjid / Masjid Shah Muneer Sahab",
+    city: "Moradabad",
     area: "Kambal Ka Tazia",
     address: "Kambal Ka Tazia, Moradabad, Uttar Pradesh 244001",
     latitude: 28.8331428,
@@ -852,6 +892,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Pathano Wali Masjid",
+    city: "Moradabad",
     area: "Bhatti Street",
     address: "Bhatti Street, Moradabad, Uttar Pradesh 244001",
     latitude: 28.833432,
@@ -873,6 +914,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Qile Wali Masjid",
+    city: "Moradabad",
     area: "Government College",
     address: "Government College, Moradabad, Uttar Pradesh 244001",
     latitude: 28.8844193,
@@ -894,6 +936,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Jama Masjid",
+    city: "Moradabad",
     area: "Katghar",
     address: "Hayat Nagar, Katghar, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -915,6 +958,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Kacheri Wali Masjid",
+    city: "Moradabad",
     area: "Darzian",
     address: "Rqvf+xfc, Darzian, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -936,6 +980,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Badi Masjid",
+    city: "Moradabad",
     area: "Asalatpura",
     address: "Bari Masjid, Asalatpura, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.834597,
@@ -957,6 +1002,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Chand Wali Masjid",
+    city: "Moradabad",
     area: "Chhajlet",
     address:
         "Rqjm+39w, Basantapur, Chhajlet, Moradabad, Uttar Pradesh 244001, India",
@@ -979,6 +1025,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Begum Wali Masjid",
+    city: "Moradabad",
     area: "Mangupura",
     address: "Rqhg+xvh, Mangupura, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -1000,6 +1047,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Rashid Masjid",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Rq46+g6g, M.I.G 20, Azad Nagar Rd, Karula, Moradabad, Uttar Pradesh 244001, India",
@@ -1022,6 +1070,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Shamsi Masjid",
+    city: "Moradabad",
     area: "Lajpat Nagar",
     address: "Rqhj+3r6, Lajpat Nagar, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.827621,
@@ -1043,6 +1092,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Qile Wali Masjid",
+    city: "Moradabad",
     area: "Faiz Ganj",
     address:
         "Rqpq+9c6, Ghani Khana, Faiz Ganj, Moradabad, Uttar Pradesh 244001, India",
@@ -1065,6 +1115,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Shahi Masjid",
+    city: "Moradabad",
     area: "Chhajlet",
     address:
         "Rqpj+32m, Faiz Gunj-Government College Rd, Mandi Chowk, Chhajlet, Moradabad, Uttar Pradesh 244001, India",
@@ -1087,6 +1138,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Tiles Wali Masjid",
+    city: "Moradabad",
     area: "Guiyan Bagh",
     address:
         "Guiyan Bagh Moradabad Uttar Pradesh 244001 Republic Of, 1st, Mughalpura, Guiyan Bagh, Moradabad, Uttar Pradesh 244001, India",
@@ -1109,6 +1161,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Gaagan Masjid",
+    city: "Moradabad",
     area: "Buddhi Vihar",
     address:
         "Rphc+c3x, Delhi Road, Nh 24, Buddhi Vihar, Moradabad, Uttar Pradesh 244001, India",
@@ -1131,6 +1184,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Jama Masjid Harthala Moradabad",
+    city: "Moradabad",
     area: "Harthala",
     address:
         "Vpfr+xqf, Kanth Rd, Harthala, Moradabad, Uttar Pradesh 244001, India",
@@ -1153,6 +1207,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Ibrahim",
+    city: "Moradabad",
     area: "Kisrol",
     address:
         "RQVH+6M6 Budha Sha Ka Takiya, Hazeera, Kisrol, Moradabad, Uttar Pradesh 244001, India",
@@ -1175,6 +1230,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madina Masjid",
+    city: "Moradabad",
     area: "Khokran Street",
     address:
         "Rqjm+vgj, Tabkiya Rd, Khokran Street, 244001, Moradabad, Uttar Pradesh 244001, India",
@@ -1197,6 +1253,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Lal MASJID MARKAZ",
+    city: "Moradabad",
     area: "Pat Pat Sarai",
     address: "Rqqg+9h9, Pat Pat Sarai, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.838147123637,
@@ -1218,6 +1275,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Raja Wali Masjid",
+    city: "Moradabad",
     area: "Jigar Road",
     address:
         "Rqrm+2fg, Dahriya, Jigar Road, Moradabad, Uttar Pradesh 244001, India",
@@ -1240,6 +1298,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Jamaul Huda Masjid",
+    city: "Moradabad",
     area: "Chhajlet",
     address: "Rqjj+36j, Chhajlet, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -1261,6 +1320,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Ek Rat Ki Masjid",
+    city: "Moradabad",
     area: "Gandhi Nagar",
     address:
         "Rqgh+x4c, Eidgah Rd, Near Ek Raat Ki Masjid, Gandhi Nagar, Moradabad, Uttar Pradesh 244001, India",
@@ -1283,6 +1343,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Baradari Masjid",
+    city: "Moradabad",
     area: "Pat Pat Sarai",
     address:
         "Rqrf+8rx, Patnagarh, Pat Pat Sarai, Moradabad, Uttar Pradesh 244001, India",
@@ -1305,6 +1366,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Khajoor Wali Masjid",
+    city: "Moradabad",
     area: "Mohammad Ali Rd",
     address:
         "Rqvf+5pg, Sarai Husaini Begum, Baradari, Mohammad Ali Rd, Moradabad, Uttar Pradesh 244001, India",
@@ -1327,6 +1389,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Maulana Wali Masjid",
+    city: "Moradabad",
     area: "Bartan Bazaar",
     address:
         "Rqqh+8r6, Tobacco St, Bartan Bazaar, Moradabad, Uttar Pradesh 244001, India",
@@ -1349,6 +1412,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Tare Wali Masjid",
+    city: "Moradabad",
     area: "Katghar",
     address: "Hayat Nagar, Katghar, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -1370,6 +1434,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Jhaboo Wali",
+    city: "Moradabad",
     area: "Uttar Pradesh 244001",
     address: "Rqvg+4p4, JHABOO Ka Nala, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -1391,6 +1456,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Imdadiya Masjid Ekta Vihar Dhoraha Moradabad",
+    city: "Moradabad",
     area: "Tajpur Mafi",
     address:
         "244104, Rampur Rd, Ekta Vihar East, Tajpur Mafi, Uttar Pradesh 244902, India",
@@ -1413,6 +1479,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Dhobi Waali Masjid",
+    city: "Moradabad",
     area: "Katghar",
     address:
         "Rqhv+j36, Jama Masjid Road, Hayat Nagar, Katghar, Moradabad, Uttar Pradesh 244001, India",
@@ -1435,6 +1502,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Chand Masjid",
+    city: "Moradabad",
     area: "Chhajlet",
     address: "Rqjh+wv6, Chhajlet, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -1456,6 +1524,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Roshan Wali Masjid",
+    city: "Moradabad",
     area: "Ghurathy",
     address:
         "RQVM+C4P Roshan Wali Masjid, Ghurathy, Moradabad, Uttar Pradesh 244001, India",
@@ -1478,6 +1547,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Zama Masjid",
+    city: "Moradabad",
     area: "Muzarrif Rd",
     address: "Rq63+h2w, Muzarrif Rd, Moradabad, Uttar Pradesh 244103, India",
     latitude: 28.8290778,
@@ -1499,6 +1569,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Fil Khana Wali Mosque",
+    city: "Moradabad",
     area: "Pat Pat Sarai",
     address: "Rqqh+m8j, Pat Pat Sarai, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.838147123637,
@@ -1520,6 +1591,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Lal Masjid",
+    city: "Moradabad",
     area: "Harthala",
     address:
         "VPFQ+W43 Mohollha Lal Masjid, Harthala Station Rd, Harthala, Moradabad, Uttar Pradesh 244001, India",
@@ -1542,6 +1614,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Takhat Wali",
+    city: "Moradabad",
     area: "Ghurathy",
     address:
         "Rqrg+8vf, Mohammad Ali Rd, Ghurathy, Moradabad, Uttar Pradesh 244001, India",
@@ -1564,6 +1637,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Molsiry Ki Masjid",
+    city: "Moradabad",
     area: "Kisrol",
     address:
         "Molsiry Ki Masjid, Kisrol, Moradabad, Uttar Pradesh 244001, India",
@@ -1586,6 +1660,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Noorani Masjid",
+    city: "Moradabad",
     area: "Vikas Nagar",
     address: "Rqf5+69c, Vikas Nagar, Moradabad, Uttar Pradesh 244103, India",
     latitude: 28.8290778,
@@ -1607,6 +1682,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Al Quraish Masjid",
+    city: "Moradabad",
     area: "Asalatpura",
     address:
         "758, Badi Masjid Rd, Asalatpura, Moradabad, Uttar Pradesh 244001, India",
@@ -1629,6 +1705,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Mohammadi Masjid",
+    city: "Moradabad",
     area: "Transport Nagar",
     address:
         "Rq27+3pf, Transport Nagar, Moradabad, Uttar Pradesh 244001, India",
@@ -1651,6 +1728,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Kisrol Sultana Madeena Masjid",
+    city: "Moradabad",
     area: "Ghurathy",
     address: "Rqrj+p5p, Ghurathy, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -1672,6 +1750,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Haji Ramzani Masjid Moradabad",
+    city: "Moradabad",
     area: "Chakkar Ki Milak",
     address:
         "Vq5c+72v, Chakkar Ki Milak, Moradabad, Uttar Pradesh 244001, India",
@@ -1694,6 +1773,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "MASJID FIRDAUS",
+    city: "Moradabad",
     area: "Buddhi Vihar",
     address:
         "9, Delhi Rd, Vikas Colony, Buddhi Vihar, Moradabad, Uttar Pradesh 244001, India",
@@ -1716,6 +1796,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Mughlo Wali Masjid",
+    city: "Moradabad",
     area: "Guiyan Bagh",
     address:
         "Rqjq+wgv, Prince Rd, Guiyan Bagh, Moradabad, Uttar Pradesh 244001, India",
@@ -1738,6 +1819,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Malik Masjid",
+    city: "Moradabad",
     area: "Karula",
     address: "Gali No.10a, Karula, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -1759,6 +1841,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Gulaab Masjid",
+    city: "Moradabad",
     area: "Himgiri Colony",
     address: "Vpcv+9vx, Himgiri Colony, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.871323072245,
@@ -1780,6 +1863,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "MASJID HAZRAT AISHA",
+    city: "Moradabad",
     area: "Faiz Ganj",
     address:
         "Rqqp+853, Tavela St, Faiz Ganj, Moradabad, Uttar Pradesh 244001, India",
@@ -1802,6 +1886,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Maidan Wali Masjid",
+    city: "Moradabad",
     area: "Dehria Gokuldas College Road",
     address:
         "Dehria Gokuldas College Road, Moradabad, Uttar Pradesh 244001, India",
@@ -1824,6 +1909,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Noorani Masjid",
+    city: "Moradabad",
     area: "Ram Raheem Nagar",
     address:
         "Rq2f+mh6, Ram Raheem Nagar, Moradabad, Uttar Pradesh 244001, India",
@@ -1846,6 +1932,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Ibrahim Masjid",
+    city: "Moradabad",
     area: "Katghar",
     address:
         "Rqgq+hh6, Pachpeda Rd, Hayat Nagar, Katghar, Moradabad, Uttar Pradesh 244001, India",
@@ -1868,6 +1955,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid",
+    city: "Moradabad",
     area: "Civil Lines",
     address:
         "Vq66+rfc, Chakkar Ki Milak Rd, Civil Lines, Moradabad, Uttar Pradesh 244001, India",
@@ -1890,6 +1978,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madina Masjid",
+    city: "Moradabad",
     area: "Uttar Pradesh 244103",
     address: "Rq72+645, Moradabad, Uttar Pradesh 244103, India",
     latitude: 28.8290778,
@@ -1911,6 +2000,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madeena Masjid",
+    city: "Moradabad",
     area: "Tajpur Mafi",
     address: "Rrv8+7ch, Tajpur Mafi, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -1932,6 +2022,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Noori Masjid",
+    city: "Moradabad",
     area: "Harthala",
     address: "Vpfq+8gf, Harthala, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -1953,6 +2044,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Abu Haneefa",
+    city: "Moradabad",
     area: "Rehmat Nagar",
     address: "Rq5f+fc7, Rehmat Nagar, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.814083857313,
@@ -1974,6 +2066,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Bahadur Ali Shah Mosque",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Rq68+gcg, Miyan Colony Rd, Neta Colony, Karula, Moradabad, Uttar Pradesh 244001, India",
@@ -1996,6 +2089,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "IMLI WALI MASJID",
+    city: "Moradabad",
     area: "Chaurasi",
     address:
         "Deewan Ka Bazar, Capital Cinema Road, Near Faled Darain School, Chaurasi, Moradabad, Uttar Pradesh 244001, India",
@@ -2018,6 +2112,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid",
+    city: "Moradabad",
     area: "Civil Lines",
     address: "Rqwf+r9f, Civil Lines, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -2039,6 +2134,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Kajipura Mosque",
+    city: "Moradabad",
     area: "Uttar Pradesh 244001",
     address: "Vpqc+9r7, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -2060,6 +2156,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madina Masjid",
+    city: "Moradabad",
     area: "Shiv Nagar",
     address:
         "Rq7g+mmj, Chandausi, Shiv Nagar, Moradabad, Uttar Pradesh 244001, India",
@@ -2082,6 +2179,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Mehndi Bagh",
+    city: "Moradabad",
     area: "Lajpat Nagar",
     address:
         "Rqfh+8f4, Rampur Rd, Adarsh Nagar, Lajpat Nagar, Moradabad, Uttar Pradesh 244001, India",
@@ -2104,6 +2202,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Hamid Masjid",
+    city: "Moradabad",
     area: "Rehmat Nagar",
     address:
         "700, Gali Number 1, Chandausi, Rehmat Nagar, Moradabad, Uttar Pradesh 244001, India",
@@ -2126,6 +2225,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madeena Masjid",
+    city: "Moradabad",
     area: "Sonakpur",
     address: "Vp5p+frw, Sonakpur, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.858824,
@@ -2147,6 +2247,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Chappar Wali",
+    city: "Moradabad",
     area: "Mangupura",
     address: "Rqhj+628, Mangupura, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -2168,6 +2269,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Taj Masjid",
+    city: "Moradabad",
     area: "Jawahar Nagar",
     address:
         "Kajipura Rd, Jawahar Nagar, Moradabad, Uttar Pradesh 244001, India",
@@ -2190,6 +2292,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Nal Wali Masjid",
+    city: "Moradabad",
     area: "Jama Masjid Road",
     address:
         "Rqhr+xpc, Barwalan Ka Tiraha, Jama Masjid Road, Moradabad, Uttar Pradesh 244001, India",
@@ -2212,6 +2315,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Badi Masjid",
+    city: "Moradabad",
     area: "Katghar",
     address:
         "Chowk, Rampur Rd, Near Hanuman Murati, Katghar, Moradabad, Uttar Pradesh 244001, India",
@@ -2234,6 +2338,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Naimi Masjid",
+    city: "Moradabad",
     area: "Ghurathy",
     address: "Ghurathy, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8405399,
@@ -2255,6 +2360,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Bagh Wali Masjid",
+    city: "Moradabad",
     area: "Bhensia",
     address: "Rrjh+68f, Bhensia, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8375691,
@@ -2276,6 +2382,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Laal Minaar Masjid",
+    city: "Moradabad",
     area: "Tajpur Mafi",
     address: "Rrrc+85c, Tajpur Mafi, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -2297,6 +2404,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Gulzar",
+    city: "Moradabad",
     area: "Bartan Bazaar",
     address:
         "Gulzaar Masjid, Chamaka Pull, Bartan Bazaar, Moradabad, Uttar Pradesh 244001, India",
@@ -2319,6 +2427,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid E Tauheed Ahle Hadees Masjid",
+    city: "Moradabad",
     area: "Bartan Bazaar",
     address:
         "Rqpj+4jc, Mandi Chowk, Bartan Bazaar, Moradabad, Uttar Pradesh 244001, India",
@@ -2341,6 +2450,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Sabzi Mandi Wali Masjid",
+    city: "Moradabad",
     area: "Pat Pat Sarai",
     address:
         "Rqrf+55m, Ganj Sabji Mandi Rd, Pat Pat Sarai, Moradabad, Uttar Pradesh 244001, India",
@@ -2363,6 +2473,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "TEELE WALI MASJID",
+    city: "Moradabad",
     area: "Chakkar Ki Milak",
     address:
         "Vq59+r4v, Patang Wali Gali, Chakkar Ki Milak, Moradabad, Uttar Pradesh 244001, India",
@@ -2385,6 +2496,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Muslim College Wali Masjid",
+    city: "Moradabad",
     area: "Katghar",
     address:
         "Rqgv+qrq, Hayat Nagar, Katghar, Moradabad, Uttar Pradesh 244001, India",
@@ -2407,6 +2519,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Sabri Masjid",
+    city: "Moradabad",
     area: "Mohra Ki Milak",
     address:
         "Vpqq+hfq, Sabri Masjid Rd, Mora Mustahkam, Mohra Ki Milak, Moradabad, Uttar Pradesh 244001, India",
@@ -2429,6 +2542,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Puttan Shaheed",
+    city: "Moradabad",
     area: "Chhajlet",
     address:
         "Rqhj+xcq, Galshaheed Rd, Chhajlet, Moradabad, Uttar Pradesh 244001, India",
@@ -2451,6 +2565,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Hathe Wali Masjid",
+    city: "Moradabad",
     area: "Asalatpura",
     address:
         "Rqjf+6jx, Gali Number 8, Asalatpura, Moradabad, Uttar Pradesh 244001, India",
@@ -2473,6 +2588,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Kadri Masjid",
+    city: "Moradabad",
     area: "Harthala",
     address: "Vpfj+f98, Harthala, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -2494,6 +2610,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madeena Masjid",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Rq68+4p9, Neta Colony, Karula, Moradabad, Uttar Pradesh 244001, India",
@@ -2516,6 +2633,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Ghosiya Masjid",
+    city: "Moradabad",
     area: "Chakkar Ki Milak",
     address:
         "Vq69+898, Chakkar Ki Milak, Moradabad, Uttar Pradesh 244001, India",
@@ -2538,6 +2656,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Madina Masjid Bisanpur",
+    city: "Moradabad",
     area: "Uttar Pradesh 244001",
     address: "Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8204765,
@@ -2559,6 +2678,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Nasruddin Meraj Masjid",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Rq77+r5p, Neta Colony, Karula, Moradabad, Uttar Pradesh 244001, India",
@@ -2581,6 +2701,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Mufti Shabbeer Ahamd Qasmi",
+    city: "Moradabad",
     area: "Near Zakariya Madarsa",
     address:
         "Jannat Baagh, Lakri Road, Near Zakariya Madarsa, Moradabad, Uttar Pradesh 244001, India",
@@ -2603,6 +2724,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Do Kuon Wali Masjid",
+    city: "Moradabad",
     area: "Asalatpura",
     address: "Asalatpura, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8304144,
@@ -2624,6 +2746,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Mairaj Wali Masjid",
+    city: "Moradabad",
     area: "Chaurasi",
     address:
         "Rqwh+46v, Unnamed Road, Chaurasi, Moradabad, Uttar Pradesh 244001, India",
@@ -2646,6 +2769,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Mustufa Masjid",
+    city: "Moradabad",
     area: "Guiyan Bagh",
     address:
         "Indra Chowk, Maqbara Rd, Opp. Barwali Masjid, Guiyan Bagh, Moradabad, Uttar Pradesh 244001, India",
@@ -2668,6 +2792,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Bilal Masjid",
+    city: "Moradabad",
     area: "Chaurasi",
     address: "Rqvh+g28, Chaurasi, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -2689,6 +2814,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Sabri Masjid",
+    city: "Moradabad",
     area: "Himgiri Colony",
     address:
         "Vp9q+xpj, Himgiri Colony Rd, Himgiri Colony, Moradabad, Uttar Pradesh 244001, India",
@@ -2711,6 +2837,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Muhammadi Masjid",
+    city: "Moradabad",
     area: "Shiv Nagar",
     address:
         "Rq7c+3cv, Miyan Colony Rd, Chandausi, Shiv Nagar, Moradabad, Uttar Pradesh 244001, India",
@@ -2733,6 +2860,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Gular Wali Masjid",
+    city: "Moradabad",
     area: "Rahat Moulaey Marg",
     address:
         "Rqrm+wg8, Baghia Street, Diwan Ka Bazar, Rahat Moulaey Marg, Moradabad, Uttar Pradesh 244001, India",
@@ -2755,6 +2883,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Sabri Masjid Fakirpura",
+    city: "Moradabad",
     area: "Adarsh Colony",
     address:
         "Vp4w+r55, Fakirpura, Near 23 Pac, Adarsh Colony, Moradabad, Uttar Pradesh 244001, India",
@@ -2777,6 +2906,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Huda Masjid",
+    city: "Moradabad",
     area: "Darzian",
     address: "Rqwg+cgm, Darzian, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -2798,6 +2928,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Qadri Masjid",
+    city: "Moradabad",
     area: "Majhola",
     address: "Rq63+9vf, Majhola, Moradabad, Uttar Pradesh 244103, India",
     latitude: 28.8290778,
@@ -2819,6 +2950,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Talab Wali Masjid",
+    city: "Moradabad",
     area: "Lajpat Nagar",
     address:
         "Rqhp+f9p, Peerzada Rd, Hayat Nagar, Lajpat Nagar, Moradabad, Uttar Pradesh 244001, India",
@@ -2841,6 +2973,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Imambade Wali Masjid",
+    city: "Moradabad",
     area: "Faiz Ganj",
     address:
         "Rqqm+qh8, 4, Jigar Rd, Faiz Ganj, Moradabad, Uttar Pradesh 244001, India",
@@ -2863,6 +2996,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Gulab Masjid",
+    city: "Moradabad",
     area: "Khanpur Kasba Ahatmali",
     address:
         "Rrq3+6g8, Khanpur Kasba Ahatmali, Moradabad, Uttar Pradesh 244001, India",
@@ -2885,6 +3019,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Ayyubi Masjid",
+    city: "Moradabad",
     area: "Rehmat Nagar",
     address:
         "Rq6g+pmc, Chandausi, Rehmat Nagar, Moradabad, Uttar Pradesh 244001, India",
@@ -2907,6 +3042,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Railway Station",
+    city: "Moradabad",
     area: "Sirsi",
     address:
         "Rqm8+9h7, Railway Station Rd, Budh Bazaar, Sirsi, Moradabad, Uttar Pradesh 244301, India",
@@ -2929,6 +3065,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Naseema Masjid",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Rq47+2h7, Khwaja Nagar Rd, Karula, Moradabad, Uttar Pradesh 244001, India",
@@ -2951,6 +3088,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Khadijatul Kubra",
+    city: "Moradabad",
     area: "Rehmat Nagar",
     address: "Rq7h+6m7, Rehmat Nagar, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.814083857313,
@@ -2972,6 +3110,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Tamanna Shah",
+    city: "Moradabad",
     area: "Bartan Bazaar",
     address: "Rqqj+879, Bartan Bazaar, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -2993,6 +3132,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Bhojpur Khawaja Masjid",
+    city: "Moradabad",
     area: "Rehmat Nagar",
     address: "Rq6f+673, Rehmat Nagar, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.814083857313,
@@ -3014,6 +3154,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Gulshan E Mustafa",
+    city: "Moradabad",
     area: "Mainather Rd",
     address: "Gagan Wali, Mainather Rd, Moradabad, Uttar Pradesh 244103, India",
     latitude: 28.812105565306,
@@ -3035,6 +3176,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Jama Masjid",
+    city: "Moradabad",
     area: "Sonakpur",
     address: "Sonakpur, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8603084,
@@ -3056,6 +3198,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Masjid Sharif",
+    city: "Moradabad",
     area: "Bhensia",
     address: "Rrjh+p53, Bhensia, Moradabad, Uttar Pradesh 244104, India",
     latitude: null,
@@ -3077,6 +3220,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Tara Masjid",
+    city: "Moradabad",
     area: "Mau",
     address: "Vphm+5p3, Harthala, Mau, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -3098,6 +3242,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Mohammadi Masjid",
+    city: "Moradabad",
     area: "Line Par",
     address: "Rqfc+xjc, Line Par, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.802351,
@@ -3119,6 +3264,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Haji Abdul Gaffar Sunni Jama Masjid",
+    city: "Moradabad",
     area: "Karula",
     address:
         "Rq5g+96j, Gaffar Nagar, Karula, Moradabad, Uttar Pradesh 244001, India",
@@ -3141,6 +3287,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Hauz Wali Badi Masjid",
+    city: "Moradabad",
     area: "Faiz Ganj",
     address: "Rqqp+p5h, Faiz Ganj, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.839242,
@@ -3162,6 +3309,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Hashmi Yahya Masjid",
+    city: "Moradabad",
     area: "Shahidabad",
     address:
         "Qqx8+m34, Transport Nagar, Shahidabad, Moradabad, Uttar Pradesh 244001, India",
@@ -3184,6 +3332,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Badh Wali Masjid",
+    city: "Moradabad",
     area: "Faiz Ganj",
     address: "Rqpp+mgv, Faiz Ganj, Moradabad, Uttar Pradesh 244001, India",
     latitude: 28.8331428,
@@ -3205,6 +3354,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Niyariyon Wali Mosque",
+    city: "Moradabad",
     area: "Katghar",
     address:
         "Rqhm+99j, Hayat Nagar, Katghar, Moradabad, Uttar Pradesh 244001, India",
@@ -3227,6 +3377,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Khajoor Wali Masjid",
+    city: "Moradabad",
     area: "Katghar",
     address:
         "King Medical Hall, King Medical Hall Ln, Hayat Nagar, Katghar, Moradabad, Uttar Pradesh 244001, India",
@@ -3249,6 +3400,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Imambargah Abu Talib As Shia Masjid",
+    city: "Moradabad",
     area: "Kisrol",
     address:
         "Rqwm+m4h, Nawabpura Road, Kisrol, Moradabad, Uttar Pradesh 244001, India",
@@ -3271,6 +3423,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "SAIFIYO WAALI MASJID",
+    city: "Moradabad",
     area: "Chakkar Ki Milak",
     address:
         "Vq77+5mj, Chakkar Ki Milak, Moradabad, Uttar Pradesh 244001, India",
@@ -3293,6 +3446,7 @@ final sampleMosques = <Mosque>[
   ),
   Mosque(
     name: "Lal Masjid",
+    city: "Moradabad",
     area: "Rampur",
     address:
         "Doraha Barbara Manjra, Near Lal Masjid, Rampur, Moradabad, Uttar Pradesh 244001, India",
