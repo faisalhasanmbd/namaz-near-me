@@ -75,12 +75,10 @@ class NotificationService {
         priority: Priority.high,
         playSound: true,
         enableVibration: true,
-        sound: RawResourceAndroidNotificationSound('namaz_reminder'),
       ),
       iOS: DarwinNotificationDetails(
         presentAlert: true,
         presentSound: true,
-        sound: 'namaz_reminder.wav',
       ),
     );
 
