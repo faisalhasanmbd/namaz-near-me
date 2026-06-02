@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:math' as math;
+import 'package:http/http.dart' as http;
 import '../models/daily_islamic_timings.dart';
 
 class CityInfo {
@@ -541,59 +543,124 @@ const List<CityInfo> indianCities = [
 ];
 
 class IslamicTimingService {
+  static Future<String?> fetchHijriDateIndia({
+    DateTime? date,
+    int dayAdjustment = 0,
+  }) async {
+    try {
+      final d = (date ?? DateTime.now()).add(Duration(days: dayAdjustment));
+      final url = Uri.parse(
+          'https://api.aladhan.com/v1/gToH/${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}');
+      final response = await http.get(url).timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        final hijri = json['data']['hijri'];
+        final day = int.parse(hijri['day'].toString());
+        final month = int.parse(hijri['month']['number'].toString());
+        final year = int.parse(hijri['year'].toString());
+        final months = [
+          'Muharram',
+          'Safar',
+          'Rabi al-Awwal',
+          'Rabi al-Thani',
+          'Jumada al-Awwal',
+          'Jumada al-Thani',
+          'Rajab',
+          "Sha'ban",
+          'Ramadan',
+          'Shawwal',
+          "Zi'Qadah",
+          'Dhu al-Hijjah'
+        ];
+        return '$day ${months[month - 1]} $year AH';
+      }
+    } catch (_) {}
+    return null;
+  }
+
   final double latitude;
   final double longitude;
-  static const _timezoneOffsetMinutes = 330;
+  final int asrShadowFactor;
   static const _fajrAngle = -18.0;
   static const _ishaAngle = -18.0;
 
-  IslamicTimingService({this.latitude = 28.8386, this.longitude = 78.7733});
+  IslamicTimingService({
+    this.latitude = 28.8386,
+    this.longitude = 78.7733,
+    this.asrShadowFactor = 2,
+  });
 
-  DailyIslamicTimings today({DateTime? now}) {
+  DateTime hijriDateFor(DateTime date) {
+    final currentMinutes = date.hour * 60 + date.minute;
+    final sunsetToday = _solarTime(date, -0.833, beforeNoon: false);
+    return currentMinutes >= sunsetToday
+        ? date.add(const Duration(days: 1))
+        : date;
+  }
+
+  /// Returns the Islamic day — which starts at Maghrib (sunset).
+  /// If current time is after Maghrib, we show tomorrow's Gregorian date
+  /// but the NEXT Islamic date (since Islamic day has begun).
+  DailyIslamicTimings today({DateTime? now, String? hijriDateOverride}) {
     final date = now ?? DateTime.now();
+
+    // Calculate sunset (Maghrib) for today
+    final sunsetToday = _solarTime(date, -0.833, beforeNoon: false);
+
+    // Islamic day starts at Maghrib — if we're past Maghrib, show next Islamic day
+    final islamicDate = hijriDateFor(date);
+
+    // Always calculate prayer times for TODAY (Gregorian) for accuracy
     final sunrise = _solarTime(date, -0.833, beforeNoon: true);
-    final sunset = _solarTime(date, -0.833, beforeNoon: false);
+    final sunset = sunsetToday;
     final fajr = _solarTime(date, _fajrAngle, beforeNoon: true);
     final isha = _solarTime(date, _ishaAngle, beforeNoon: false);
     final zohar = _solarNoonMinutes(date).round();
-    final asr = _asrTime(date, shadowFactor: 2);
+    final asr = _asrTime(date, shadowFactor: asrShadowFactor);
     final sehriEnd = fajr - 6;
     final zawalStart = zohar - 10;
     final zawalEnd = zohar - 1;
     final tahajjudStart =
         _normalizeMinutes(isha + _nightLength(isha, fajr) ~/ 2);
+
     return DailyIslamicTimings(
       weekday: _weekday(date),
       englishDate: _englishDate(date),
-      hijriDate: _hijriDate(date),
+      hijriDate: hijriDateOverride ?? _hijriDate(islamicDate),
       entries: [
-        IslamicTimeEntry(label: 'Khatm Sehri', time: _formatTime(sehriEnd)),
-        IslamicTimeEntry(label: 'Waqt Fajr', time: _formatTime(fajr)),
+        IslamicTimeEntry(label: 'Sehri Ends', time: _formatTime(sehriEnd)),
+        IslamicTimeEntry(label: 'Fajr', time: _formatTime(fajr)),
         IslamicTimeEntry(label: 'Sunrise', time: _formatTime(sunrise)),
         IslamicTimeEntry(
           label: 'Zawal',
-          time: '${_formatTime(zawalStart)} - ${_formatTime(zawalEnd)}',
+          time: '${_formatTime(zawalStart)} – ${_formatTime(zawalEnd)}',
         ),
-        IslamicTimeEntry(label: 'Waqt Zohar', time: _formatTime(zohar)),
-        IslamicTimeEntry(label: 'Waqt Asr', time: _formatTime(asr)),
-        IslamicTimeEntry(label: 'Maghrib/Iftar', time: _formatTime(sunset)),
-        IslamicTimeEntry(label: 'Waqt Isha', time: _formatTime(isha)),
+        IslamicTimeEntry(label: 'Zuhr', time: _formatTime(zohar)),
+        IslamicTimeEntry(label: 'Asr', time: _formatTime(asr)),
+        IslamicTimeEntry(label: 'Maghrib / Iftar', time: _formatTime(sunset)),
+        IslamicTimeEntry(label: 'Isha', time: _formatTime(isha)),
         IslamicTimeEntry(
           label: 'Tahajjud',
-          time: '${_formatTime(tahajjudStart)} - ${_formatTime(fajr)}',
+          time: '${_formatTime(tahajjudStart)} – ${_formatTime(fajr)}',
         ),
         IslamicTimeEntry(
           label: 'Roza',
-          time: '${_formatTime(sehriEnd)} - ${_formatTime(sunset)}',
+          time: '${_formatTime(sehriEnd)} – ${_formatTime(sunset)}',
         ),
       ],
     );
   }
 
+  String maghribJamaatTime({DateTime? now}) {
+    final date = now ?? DateTime.now();
+    final iftar = _solarTime(date, -0.833, beforeNoon: false);
+    return _formatTime(iftar + 5);
+  }
+
   double _solarNoonMinutes(DateTime date) {
     final day = _dayOfYear(date);
     final eqTime = _equationOfTime(day);
-    return 720 - 4 * longitude - eqTime + _timezoneOffsetMinutes;
+    return 720 - 4 * longitude - eqTime + date.timeZoneOffset.inMinutes;
   }
 
   int _solarTime(DateTime date, double altitude, {required bool beforeNoon}) {
@@ -628,6 +695,7 @@ class IslamicTimingService {
 
   static int _nightLength(int isha, int fajr) =>
       fajr > isha ? fajr - isha : 24 * 60 - isha + fajr;
+
   static double _equationOfTime(int d) {
     final g = 2 * math.pi / 365 * (d - 1);
     return 229.18 *
@@ -652,22 +720,22 @@ class IslamicTimingService {
   static int _dayOfYear(DateTime date) =>
       date.difference(DateTime(date.year)).inDays + 1;
   static int _normalizeMinutes(int m) => ((m % 1440) + 1440) % 1440;
+
   static String _formatTime(int t) {
     final m = _normalizeMinutes(t);
     final h24 = m ~/ 60;
     final min = m % 60;
     final p = h24 >= 12 ? 'PM' : 'AM';
     final h12 = h24 % 12 == 0 ? 12 : h24 % 12;
-    return '$h12:${min.toString().padLeft(2, "0")} $p';
+    return '$h12:${min.toString().padLeft(2, '0')} $p';
   }
 
-  static String _englishDate(DateTime d) {
-    return '${d.day.toString().padLeft(2, "0")} ${_month(d.month)} ${d.year}';
-  }
+  static String _englishDate(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')} ${_month(d.month)} ${d.year}';
 
   static String _hijriDate(DateTime date) {
     final h = _gregorianToHijri(date);
-    return '${h.day} ${_hijriMonth(h.month)} ${h.year}';
+    return '${h.day} ${_hijriMonth(h.month)} ${h.year} AH';
   }
 
   static _HijriDate _gregorianToHijri(DateTime date) {
@@ -699,6 +767,7 @@ class IslamicTimingService {
       ((3 + 11 * y) / 30).floor() +
       1948439.5 -
       1;
+
   static String _weekday(DateTime d) => [
         'Monday',
         'Tuesday',
@@ -708,6 +777,7 @@ class IslamicTimingService {
         'Saturday',
         'Sunday'
       ][d.weekday - 1];
+
   static String _month(int m) => [
         'January',
         'February',
@@ -722,6 +792,7 @@ class IslamicTimingService {
         'November',
         'December'
       ][m - 1];
+
   static String _hijriMonth(int m) => [
         'Muharram',
         'Safar',
@@ -730,12 +801,13 @@ class IslamicTimingService {
         'Jumada al-Awwal',
         'Jumada al-Thani',
         'Rajab',
-        'Shaaban',
+        "Sha'ban",
         'Ramadan',
         'Shawwal',
         "Zi'Qadah",
-        'Zil Hijjah'
+        'Dhu al-Hijjah'
       ][m - 1];
+
   static double _degToRad(double d) => d * math.pi / 180;
   static double _radToDeg(double r) => r * 180 / math.pi;
 }
