@@ -2640,12 +2640,6 @@ class _RewardsScreenState extends State<RewardsScreen> {
                     rank: 1,
                   ),
                   const SizedBox(height: 16),
-                  const _RewardsSectionTitle('Your Progress'),
-                  _ProgressRewardCard(score: topScore, target: _targetScore),
-                  const SizedBox(height: 16),
-                  const _RewardsSectionTitle('Achievements'),
-                  _AchievementsGrid(score: topScore, masjidCount: masjidCount),
-                  const SizedBox(height: 16),
                   const _RewardsSectionTitle('Leaderboard'),
                   for (var i = 0; i < docs.length; i++)
                     _LeaderboardTile(
@@ -2654,14 +2648,11 @@ class _RewardsScreenState extends State<RewardsScreen> {
                       score: _readContributorInt(docs[i].data(), ['score']),
                     ),
                   const SizedBox(height: 18),
-                  _CertificateTemplateCard(
-                    name: topName,
-                    score: topScore,
-                    masjidCount: masjidCount,
-                    isSharing: _sharingCertificate,
-                    onPreviewCertificate: () =>
-                        _openCertificatePreview(topName, topScore, masjidCount),
-                    onShareWhatsApp: () => _shareCertificateText(topName),
+                  _MyProgressSection(
+                    targetScore: _targetScore,
+                    sharingCertificate: _sharingCertificate,
+                    onPreviewCertificate: _openCertificatePreview,
+                    onShareWhatsApp: _shareCertificateText,
                     onCopyLink: _copyAppLink,
                     onOpenAppLink: _openAppLink,
                   ),
@@ -3064,6 +3055,76 @@ class _HeroStat extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _MyProgressSection extends StatelessWidget {
+  const _MyProgressSection({
+    required this.targetScore,
+    required this.sharingCertificate,
+    required this.onPreviewCertificate,
+    required this.onShareWhatsApp,
+    required this.onCopyLink,
+    required this.onOpenAppLink,
+  });
+
+  final int targetScore;
+  final bool sharingCertificate;
+  final Future<void> Function(String, int, int) onPreviewCertificate;
+  final Future<void> Function(String) onShareWhatsApp;
+  final Future<void> Function() onCopyLink;
+  final Future<void> Function() onOpenAppLink;
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Text(
+          'Verify your mobile number to track your progress.',
+          style: TextStyle(color: Colors.grey),
+        ),
+      );
+    }
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('top_contributors')
+          .doc(uid)
+          .snapshots(),
+      builder: (context, snap) {
+        final data = snap.data?.data();
+        final myScore = data != null
+            ? _readContributorInt(data, ['score'])
+            : 0;
+        final myMasjidCount = data != null
+            ? _readContributorInt(data, ['masjids', 'masjidCount', 'mosques'])
+            : 0;
+        final myName = data != null ? _cleanContributorName(data['name']) : '';
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const _RewardsSectionTitle('Your Progress'),
+            _ProgressRewardCard(score: myScore, target: targetScore),
+            const SizedBox(height: 16),
+            const _RewardsSectionTitle('Achievements'),
+            _AchievementsGrid(score: myScore, masjidCount: myMasjidCount),
+            const SizedBox(height: 16),
+            _CertificateTemplateCard(
+              name: myName,
+              score: myScore,
+              masjidCount: myMasjidCount,
+              isSharing: sharingCertificate,
+              onPreviewCertificate: () =>
+                  onPreviewCertificate(myName, myScore, myMasjidCount),
+              onShareWhatsApp: () => onShareWhatsApp(myName),
+              onCopyLink: onCopyLink,
+              onOpenAppLink: onOpenAppLink,
+            ),
+          ],
+        );
+      },
     );
   }
 }
