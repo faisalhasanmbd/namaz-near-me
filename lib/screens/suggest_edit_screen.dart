@@ -448,16 +448,16 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
         if (timingsToWrite.isNotEmpty) {
           final city = widget.mosque.city ?? '';
           final docId = _suggestEditMosqueDocId(widget.mosque.name, city);
-          await FirebaseFirestore.instance
+          final docRef = FirebaseFirestore.instance
               .collection('mosques')
-              .doc(docId)
-              .set({
+              .doc(docId);
+          // Ensure document exists with base fields
+          await docRef.set({
             'name': widget.mosque.name,
             'city': city.isNotEmpty ? city : 'Moradabad',
             'area': _areaController.text.trim().isNotEmpty
                 ? _areaController.text.trim()
                 : widget.mosque.area,
-            'timings': timingsToWrite,
             if (contributorName.isNotEmpty)
               'timing_verified_by_name': contributorName,
             'timing_verification_status': 'source_verified',
@@ -466,6 +466,12 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
             if (widget.mosque.placeId != null)
               'place_id': widget.mosque.placeId!,
           }, SetOptions(merge: true));
+          // Update individual timing fields — preserves other prayers already set
+          final timingUpdates = <String, dynamic>{
+            for (final e in timingsToWrite.entries)
+              'timings.${e.key}': e.value,
+          };
+          await docRef.update(timingUpdates);
         }
       }
 

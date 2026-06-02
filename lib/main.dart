@@ -1333,27 +1333,35 @@ NamazTiming _mergeTimings(
   return NamazTiming(
     fajr: _readPrayerTiming('fajr', map['fajr']) ??
         _readPrayerTiming('fajr', flatData['timings.fajr']) ??
+        _readPrayerTiming('fajr', flatData['fajr']) ??
         fallback?.fajr,
     zohar: _readPrayerTiming('zohar', map['zohar']) ??
         _readPrayerTiming('zohar', flatData['timings.zohar']) ??
+        _readPrayerTiming('zohar', flatData['zohar']) ??
         fallback?.zohar,
     asr: _readPrayerTiming('asr', map['asr']) ??
         _readPrayerTiming('asr', flatData['timings.asr']) ??
+        _readPrayerTiming('asr', flatData['asr']) ??
         fallback?.asr,
     maghrib: _readPrayerTiming('maghrib', map['maghrib']) ??
         _readPrayerTiming('maghrib', flatData['timings.maghrib']) ??
+        _readPrayerTiming('maghrib', flatData['maghrib']) ??
         fallback?.maghrib,
     isha: _readPrayerTiming('isha', map['isha']) ??
         _readPrayerTiming('isha', flatData['timings.isha']) ??
+        _readPrayerTiming('isha', flatData['isha']) ??
         fallback?.isha,
     juma: _readPrayerTiming('juma', map['juma']) ??
         _readPrayerTiming('juma', flatData['timings.juma']) ??
+        _readPrayerTiming('juma', flatData['juma']) ??
         fallback?.juma,
     eidUlFitr: _readTiming(map['eid_ul_fitr']) ??
         _readTiming(flatData['timings.eid_ul_fitr']) ??
+        _readTiming(flatData['eid_ul_fitr']) ??
         fallback?.eidUlFitr,
     eidUlAzha: _readTiming(map['eid_ul_azha']) ??
         _readTiming(flatData['timings.eid_ul_azha']) ??
+        _readTiming(flatData['eid_ul_azha']) ??
         fallback?.eidUlAzha,
   );
 }
@@ -2060,26 +2068,28 @@ class _ContributorSignupScreenState extends State<ContributorSignupScreen> {
       final mosqueDocId = _mosqueDocId(mosqueName, city);
       final mosqueRef = db.collection('mosques').doc(mosqueDocId);
       if (_mosqueMode == 'existing' && _selectedMosque != null) {
-        final updateData = {
-          ...timingData,
+        await mosqueRef.set({
           'name': mosqueName,
           'city': city,
-          'timings': submittedTimings,
-        };
-        await mosqueRef.set({
           'address': _selectedMosque?.address ?? '',
           'latitude': _selectedMosque?.latitude,
           'longitude': _selectedMosque?.longitude,
-          ...updateData,
+          ...timingData,
         }, SetOptions(merge: true));
+        // Update individual timing fields to preserve other prayers
+        await mosqueRef.update({
+          for (final e in submittedTimings.entries) 'timings.${e.key}': e.value,
+        });
       } else {
         await mosqueRef.set({
           'name': mosqueName,
           'city': city,
           'address': _addressController.text.trim(),
-          'timings': submittedTimings,
           ...timingData,
         }, SetOptions(merge: true));
+        await mosqueRef.update({
+          for (final e in submittedTimings.entries) 'timings.${e.key}': e.value,
+        });
       }
 
       await db.collection('contribution_logs').add({
