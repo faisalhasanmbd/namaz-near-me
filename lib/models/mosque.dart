@@ -61,6 +61,7 @@ class Mosque {
     this.timingVerifiedByPhone,
     required this.timingUpdatedAt,
     this.placeId,
+    this.firestoreDocId,
   });
 
   final String name;
@@ -77,6 +78,7 @@ class Mosque {
   final String? timingVerifiedByPhone;
   final DateTime timingUpdatedAt;
   final String? placeId;
+  final String? firestoreDocId;
 
   bool get hasCoordinates => latitude != null && longitude != null;
   bool get hasAnyTiming {
@@ -104,6 +106,7 @@ class Mosque {
       timingVerifiedByPhone: timingVerifiedByPhone,
       timingUpdatedAt: timingUpdatedAt,
       placeId: placeId,
+      firestoreDocId: firestoreDocId,
     );
   }
 
@@ -122,6 +125,7 @@ class Mosque {
     String? timingVerifiedByPhone,
     DateTime? timingUpdatedAt,
     String? placeId,
+    String? firestoreDocId,
   }) {
     return Mosque(
       name: name ?? this.name,
@@ -140,6 +144,7 @@ class Mosque {
           timingVerifiedByPhone ?? this.timingVerifiedByPhone,
       timingUpdatedAt: timingUpdatedAt ?? this.timingUpdatedAt,
       placeId: placeId ?? this.placeId,
+      firestoreDocId: firestoreDocId ?? this.firestoreDocId,
     );
   }
 }

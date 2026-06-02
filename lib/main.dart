@@ -205,7 +205,7 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
             result.remove(key);
             continue;
           }
-          result[key] = _mosqueFromFirestore(data, result[key]);
+          result[key] = _mosqueFromFirestore(data, result[key], docId: doc.id);
         }
         return result.values.toList();
       });
@@ -1261,7 +1261,11 @@ String? _hijriMonthKey(String? hijriDate) {
   return '$month-$year';
 }
 
-Mosque _mosqueFromFirestore(Map<String, dynamic> data, Mosque? existing) {
+Mosque _mosqueFromFirestore(
+  Map<String, dynamic> data,
+  Mosque? existing, {
+  String? docId,
+}) {
   final timings = _mergeTimings(data['timings'], existing?.timings, data);
   final updatedAt = _readDate(data['timing_updated_at']) ??
       _readDate(data['updated_at']) ??
@@ -1285,11 +1289,11 @@ Mosque _mosqueFromFirestore(Map<String, dynamic> data, Mosque? existing) {
       timingVerifiedByPhone: _readString(data['timing_verified_by_phone']) ??
           existing.timingVerifiedByPhone,
       timingUpdatedAt: updatedAt,
-      placeId: _readString(data["place_id"]),
+      placeId: _readString(data["place_id"]) ?? existing.placeId,
+      firestoreDocId: docId ?? existing.firestoreDocId,
     );
   }
 
-  // If no coordinates, use city center as fallback
   final dataLat = _readDouble(data['latitude']);
   final dataLng = _readDouble(data['longitude']);
   final cityName = _readString(data['city']) ?? '';
@@ -1301,16 +1305,14 @@ Mosque _mosqueFromFirestore(Map<String, dynamic> data, Mosque? existing) {
       );
     } catch (_) {}
   }
-  final fallbackLat = cityMatch?.latitude;
-  final fallbackLng = cityMatch?.longitude;
 
   return Mosque(
     name: _readString(data['name']) ?? 'Unnamed mosque',
     city: cityName,
     area: _readString(data['area']) ?? 'Area pending',
     address: _readString(data['address']) ?? 'Address pending',
-    latitude: dataLat ?? fallbackLat,
-    longitude: dataLng ?? fallbackLng,
+    latitude: dataLat ?? cityMatch?.latitude,
+    longitude: dataLng ?? cityMatch?.longitude,
     distanceMeters: 999999,
     timings: timings,
     isVerified: data['timing_verification_status'] == 'admin_verified' ||
@@ -1321,6 +1323,7 @@ Mosque _mosqueFromFirestore(Map<String, dynamic> data, Mosque? existing) {
     timingVerifiedByPhone: _readString(data['timing_verified_by_phone']),
     timingUpdatedAt: updatedAt,
     placeId: _readString(data['place_id']),
+    firestoreDocId: docId,
   );
 }
 
@@ -2065,7 +2068,10 @@ class _ContributorSignupScreenState extends State<ContributorSignupScreen> {
       };
 
       final city = _cityController.text.trim();
-      final mosqueDocId = _mosqueDocId(mosqueName, city);
+      // Use actual Firestore doc ID when updating existing mosque
+      final mosqueDocId = (_mosqueMode == 'existing' && _selectedMosque?.firestoreDocId != null)
+          ? _selectedMosque!.firestoreDocId!
+          : _mosqueDocId(mosqueName, city);
       final mosqueRef = db.collection('mosques').doc(mosqueDocId);
       if (_mosqueMode == 'existing' && _selectedMosque != null) {
         await mosqueRef.set({

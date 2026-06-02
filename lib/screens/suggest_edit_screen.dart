@@ -447,7 +447,9 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
         }
         if (timingsToWrite.isNotEmpty) {
           final city = widget.mosque.city ?? '';
-          final docId = _suggestEditMosqueDocId(widget.mosque.name, city);
+          // Use the actual Firestore doc ID if available, else generate one
+          final docId = widget.mosque.firestoreDocId ??
+              _suggestEditMosqueDocId(widget.mosque.name, city);
           final docRef = FirebaseFirestore.instance
               .collection('mosques')
               .doc(docId);
