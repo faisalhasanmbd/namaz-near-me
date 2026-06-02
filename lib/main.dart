@@ -15,7 +15,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'data/sample_mosques.dart';
 import 'models/daily_islamic_timings.dart';
 import 'models/mosque.dart';
 import 'services/islamic_timing_service.dart';
@@ -188,7 +187,7 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
 
   Stream<List<Mosque>> _watchMosques() async* {
     if (Firebase.apps.isEmpty) {
-      yield List<Mosque>.from(sampleMosques);
+      yield const [];
       return;
     }
     try {
@@ -196,25 +195,23 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
           .collection('mosques')
           .snapshots()
           .map((snapshot) {
-        final mergedByKey = {
-          for (final mosque in sampleMosques) _mosqueKey(mosque.name): mosque,
-        };
+        final result = <String, Mosque>{};
         for (final doc in snapshot.docs) {
           final data = doc.data();
           final name = _readString(data['name']);
           if (name == null) continue;
           final key = _mosqueKey(name);
           if (_readBool(data['deleted']) || data['status'] == 'deleted') {
-            mergedByKey.remove(key);
+            result.remove(key);
             continue;
           }
-          mergedByKey[key] = _mosqueFromFirestore(data, mergedByKey[key]);
+          result[key] = _mosqueFromFirestore(data, result[key]);
         }
-        return mergedByKey.values.toList();
+        return result.values.toList();
       });
     } catch (e) {
-      debugPrint('Firestore error: \$e');
-      yield List<Mosque>.from(sampleMosques);
+      debugPrint('Firestore error: $e');
+      yield const [];
     }
   }
 
@@ -1464,11 +1461,10 @@ class _ContributorSignupScreenState extends State<ContributorSignupScreen> {
   Timer? _nameSaveTimer;
 
   List<Mosque> get _availableMosques {
-    final source = widget.mosques.isEmpty ? sampleMosques : widget.mosques;
     final city = widget.cityName.toLowerCase().trim();
-    return source.where((mosque) {
+    return widget.mosques.where((mosque) {
       final mosqueCity = mosque.city?.toLowerCase().trim();
-      return mosqueCity != null && mosqueCity == city;
+      return mosqueCity == null || mosqueCity == city;
     }).toList();
   }
 

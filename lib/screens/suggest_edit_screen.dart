@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart' show normalizePrayerTimingInput;
 import '../models/mosque.dart';
 import '../services/location_service.dart';
@@ -15,7 +16,9 @@ class SuggestEditScreen extends StatefulWidget {
 }
 
 class _SuggestEditScreenState extends State<SuggestEditScreen> {
+  static const _savedNameKey = 'saved_contributor_name';
   final _formKey = GlobalKey<FormState>();
+  final _contributorNameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _otpController = TextEditingController();
   final _fajrController = TextEditingController();
@@ -60,6 +63,7 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
       _longitudeController.text = widget.mosque.longitude!.toStringAsFixed(6);
     }
     _loadVerification();
+    _loadSavedName();
   }
 
   Future<void> _loadVerification() async {
@@ -73,10 +77,26 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
     });
   }
 
+  Future<void> _loadSavedName() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_savedNameKey)?.trim() ?? '';
+    if (saved.isNotEmpty && mounted) {
+      _contributorNameController.text = saved;
+    }
+  }
+
+  Future<void> _saveName() async {
+    final name = _contributorNameController.text.trim();
+    if (name.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_savedNameKey, name);
+  }
+
   @override
   void dispose() {
     _phoneController.dispose();
     _otpController.dispose();
+    _contributorNameController.dispose();
     _fajrController.dispose();
     _zuhrController.dispose();
     _asrController.dispose();
@@ -292,6 +312,7 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
           content: Text('Please verify your mobile number first.')));
       return;
     }
+    await _saveName();
     final verifiedPhone =
         _verifiedPhone ?? await OtpSession.loadVerifiedPhone();
     if (!mounted) return;
@@ -354,12 +375,14 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
     setState(() => _submitting = true);
     try {
       await _ensureFirebase();
+      final contributorName = _contributorNameController.text.trim();
       final data = <String, dynamic>{
         'mosque_name': widget.mosque.name,
         'city': widget.mosque.city,
         'area': _areaController.text.trim().isNotEmpty
             ? _areaController.text.trim()
             : widget.mosque.area,
+        if (contributorName.isNotEmpty) 'contributor_name': contributorName,
         if (isLocationEdit) 'address': _addressController.text.trim(),
         if (isLocationEdit)
           'google_location': _googleLocationController.text.trim(),
@@ -430,11 +453,13 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
               .doc(docId)
               .set({
             'name': widget.mosque.name,
-            'city': city,
+            'city': city.isNotEmpty ? city : 'Moradabad',
             'area': _areaController.text.trim().isNotEmpty
                 ? _areaController.text.trim()
                 : widget.mosque.area,
             'timings': timingsToWrite,
+            if (contributorName.isNotEmpty)
+              'timing_verified_by_name': contributorName,
             'timing_verification_status': 'source_verified',
             'verified_by_phone_private': verifiedPhone,
             'timing_updated_at': FieldValue.serverTimestamp(),
@@ -507,6 +532,19 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
                       ]),
                 ),
               ]),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _contributorNameController,
+                decoration: const InputDecoration(
+                  labelText: 'Your name',
+                  hintText: 'Mohammad Ali',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.person_outline, size: 18),
+                  isDense: true,
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                ),
+              ),
               const SizedBox(height: 12),
 
               // ── What to fix ──────────────────────────────────
