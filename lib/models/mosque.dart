@@ -45,6 +45,20 @@ class NamazTiming {
   }
 }
 
+class PrayerEditMeta {
+  const PrayerEditMeta({
+    required this.name,
+    required this.updatedAt,
+    this.phone,
+    this.value,
+  });
+
+  final String name;
+  final DateTime updatedAt;
+  final String? phone;
+  final String? value;
+}
+
 class Mosque {
   const Mosque({
     required this.name,
@@ -53,6 +67,7 @@ class Mosque {
     required this.address,
     required this.latitude,
     required this.longitude,
+    this.hasOwnCoordinates = false,
     required this.distanceMeters,
     required this.timings,
     required this.isVerified,
@@ -60,8 +75,13 @@ class Mosque {
     this.timingVerifiedByName,
     this.timingVerifiedByPhone,
     required this.timingUpdatedAt,
+    this.addedByName,
+    this.addedByPhone,
+    this.addedAt,
+    this.prayerEditMeta = const {},
     this.placeId,
     this.firestoreDocId,
+    this.needsReview = false,
   });
 
   final String name;
@@ -70,6 +90,7 @@ class Mosque {
   final String address;
   final double? latitude;
   final double? longitude;
+  final bool hasOwnCoordinates;
   final int distanceMeters;
   final NamazTiming timings;
   final bool isVerified;
@@ -77,10 +98,15 @@ class Mosque {
   final String? timingVerifiedByName;
   final String? timingVerifiedByPhone;
   final DateTime timingUpdatedAt;
+  final String? addedByName;
+  final String? addedByPhone;
+  final DateTime? addedAt;
+  final Map<String, PrayerEditMeta> prayerEditMeta;
   final String? placeId;
   final String? firestoreDocId;
+  final bool needsReview;
 
-  bool get hasCoordinates => latitude != null && longitude != null;
+  bool get hasCoordinates => hasOwnCoordinates && latitude != null && longitude != null;
   bool get hasAnyTiming {
     return timings.fajr != null ||
         timings.zohar != null ||
@@ -98,6 +124,7 @@ class Mosque {
       address: address,
       latitude: latitude,
       longitude: longitude,
+      hasOwnCoordinates: hasOwnCoordinates,
       distanceMeters: distanceMeters,
       timings: timings,
       isVerified: isVerified,
@@ -105,8 +132,13 @@ class Mosque {
       timingVerifiedByName: timingVerifiedByName,
       timingVerifiedByPhone: timingVerifiedByPhone,
       timingUpdatedAt: timingUpdatedAt,
+      addedByName: addedByName,
+      addedByPhone: addedByPhone,
+      addedAt: addedAt,
+      prayerEditMeta: prayerEditMeta,
       placeId: placeId,
       firestoreDocId: firestoreDocId,
+      needsReview: needsReview,
     );
   }
 
@@ -117,6 +149,7 @@ class Mosque {
     String? address,
     double? latitude,
     double? longitude,
+    bool? hasOwnCoordinates,
     int? distanceMeters,
     NamazTiming? timings,
     bool? isVerified,
@@ -124,8 +157,13 @@ class Mosque {
     String? timingVerifiedByName,
     String? timingVerifiedByPhone,
     DateTime? timingUpdatedAt,
+    String? addedByName,
+    String? addedByPhone,
+    DateTime? addedAt,
+    Map<String, PrayerEditMeta>? prayerEditMeta,
     String? placeId,
     String? firestoreDocId,
+    bool? needsReview,
   }) {
     return Mosque(
       name: name ?? this.name,
@@ -134,6 +172,7 @@ class Mosque {
       address: address ?? this.address,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      hasOwnCoordinates: hasOwnCoordinates ?? this.hasOwnCoordinates,
       distanceMeters: distanceMeters ?? this.distanceMeters,
       timings: timings ?? this.timings,
       isVerified: isVerified ?? this.isVerified,
@@ -143,8 +182,13 @@ class Mosque {
       timingVerifiedByPhone:
           timingVerifiedByPhone ?? this.timingVerifiedByPhone,
       timingUpdatedAt: timingUpdatedAt ?? this.timingUpdatedAt,
+      addedByName: addedByName ?? this.addedByName,
+      addedByPhone: addedByPhone ?? this.addedByPhone,
+      addedAt: addedAt ?? this.addedAt,
+      prayerEditMeta: prayerEditMeta ?? this.prayerEditMeta,
       placeId: placeId ?? this.placeId,
       firestoreDocId: firestoreDocId ?? this.firestoreDocId,
+      needsReview: needsReview ?? this.needsReview,
     );
   }
 }
@@ -170,10 +214,7 @@ class NextJamaat {
 }
 
 class MosqueResult {
-  const MosqueResult({
-    required this.mosque,
-    this.nextJamaat,
-  });
+  const MosqueResult({required this.mosque, this.nextJamaat});
 
   final Mosque mosque;
   final NextJamaat? nextJamaat;

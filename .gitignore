@@ -32,6 +32,8 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+node_modules/
+**/node_modules/
 
 # Symbolication related
 app.*.symbols
@@ -43,3 +45,15 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android/iOS signing and Firebase config secrets
+key.properties
+**/key.properties
+**/*.keystore
+**/*.jks
+**/google-services.json
+**/GoogleService-Info.plist
+
+# Local environment files
+.env
+.env.*

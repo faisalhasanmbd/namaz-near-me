@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:geolocator/geolocator.dart';
 
 import '../models/mosque.dart';
@@ -21,6 +23,12 @@ class LocationService {
     isCurrentLocation: false,
   );
 
+  /// Returns null if GPS is off (caller should prompt user to enable it).
+  /// Returns UserLocation if location obtained or fell back to city center.
+  Future<bool> isLocationServiceEnabled() => Geolocator.isLocationServiceEnabled();
+
+  Future<void> openLocationSettings() => Geolocator.openLocationSettings();
+
   Future<UserLocation> currentOrFallback() async {
     try {
       final enabled = await Geolocator.isLocationServiceEnabled();
@@ -40,7 +48,7 @@ class LocationService {
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
         ),
-      );
+      ).timeout(const Duration(seconds: 10));
 
       return UserLocation(
         latitude: position.latitude,
@@ -54,7 +62,7 @@ class LocationService {
 
   List<Mosque> applyDistances(List<Mosque> mosques, UserLocation location) {
     return mosques.map((mosque) {
-      if (!mosque.hasCoordinates) return mosque.withDistance(999999);
+      if (mosque.latitude == null || mosque.longitude == null) return mosque.withDistance(999999);
       final meters = Geolocator.distanceBetween(
         location.latitude,
         location.longitude,

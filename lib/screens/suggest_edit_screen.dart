@@ -1,12 +1,21 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart';
 import '../main.dart' show normalizePrayerTimingInput;
+import '../providers/app_provider.dart';
+import '../utils/mosque_utils.dart' show cityContributorDocId;
+import '../utils/phone_utils.dart';
 import '../models/mosque.dart';
+import '../data/cities.dart';
+import '../services/islamic_timing_service.dart';
 import '../services/location_service.dart';
 import '../services/otp_session.dart';
+import '../services/prayer_time_validator.dart';
+import '../widgets/board_scan_button.dart';
 
 class SuggestEditScreen extends StatefulWidget {
   const SuggestEditScreen({super.key, required this.mosque});
@@ -16,13 +25,12 @@ class SuggestEditScreen extends StatefulWidget {
 }
 
 class _SuggestEditScreenState extends State<SuggestEditScreen> {
-  static const _savedNameKey = 'saved_contributor_name';
   final _formKey = GlobalKey<FormState>();
   final _contributorNameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _otpController = TextEditingController();
   final _fajrController = TextEditingController();
-  final _zuhrController = TextEditingController();
+  final _zoharController = TextEditingController();
   final _asrController = TextEditingController();
   final _maghribController = TextEditingController();
   final _ishaController = TextEditingController();
@@ -46,9 +54,13 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
   String? _pendingVerificationPhone;
   String? _verifiedPhone;
   String? _otpStatus;
+  String _savedName = '';
   double? _capturedLat;
   double? _capturedLng;
   String? _capturedLocationText;
+  // OTP cooldown — UX protection; real abuse prevention is handled by Firebase Auth
+  int _otpCooldownSeconds = 0;
+  Timer? _otpCooldownTimer;
 
   @override
   void initState() {
@@ -63,42 +75,72 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
       _longitudeController.text = widget.mosque.longitude!.toStringAsFixed(6);
     }
     _loadVerification();
-    _loadSavedName();
   }
 
   Future<void> _loadVerification() async {
-    final phone = await OtpSession.loadVerifiedPhone();
-    if (phone == null || !mounted) return;
-    setState(() {
-      _verifiedPhone = phone;
-      _phoneVerified = true;
-      _phoneController.text = phone;
-      _otpStatus = 'Mobile verified ✓';
-    });
-  }
+    final appState = context.read<AppState>();
+    // AppState is authoritative (loaded at startup); OtpSession is the fallback
+    final results = await Future.wait([
+      OtpSession.loadVerifiedPhone(),
+      OtpSession.loadName(),
+    ]);
+    final phone = appState.verifiedPhone ?? results[0];
+    final savedName = appState.contributorName ?? results[1];
+    if (!mounted) return;
 
-  Future<void> _loadSavedName() async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString(_savedNameKey)?.trim() ?? '';
-    if (saved.isNotEmpty && mounted) {
-      _contributorNameController.text = saved;
+    if (savedName != null && savedName.isNotEmpty) {
+      _savedName = savedName;
+      if (_contributorNameController.text.trim().isEmpty) {
+        _contributorNameController.text = savedName;
+      }
+    }
+
+    if (phone == null) return;
+
+    // Only restore "verified" state if the Firebase Auth token also carries
+    // this phone_number. If the token is from a different session (e.g. the
+    // user reinstalled or the token was cleared), Firestore rules will deny
+    // the write even though OtpSession still shows the cached phone.
+    final firebasePhone = _firebaseAuthPhone();
+    if (firebasePhone == phone) {
+      setState(() {
+        _verifiedPhone = phone;
+        _phoneVerified = true;
+        _phoneController.text = phone;
+        _otpStatus = 'Mobile verified ✓';
+      });
+    } else {
+      // Pre-fill the number so the user doesn't have to retype it,
+      // but require a fresh OTP this session to get a valid token.
+      setState(() {
+        _phoneController.text = phone;
+      });
     }
   }
 
-  Future<void> _saveName() async {
-    final name = _contributorNameController.text.trim();
-    if (name.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_savedNameKey, name);
+  void _startOtpCooldown() {
+    setState(() => _otpCooldownSeconds = 60);
+    _otpCooldownTimer?.cancel();
+    _otpCooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _otpCooldownSeconds--;
+        if (_otpCooldownSeconds <= 0) timer.cancel();
+      });
+    });
   }
 
   @override
   void dispose() {
+    _otpCooldownTimer?.cancel();
     _phoneController.dispose();
     _otpController.dispose();
     _contributorNameController.dispose();
     _fajrController.dispose();
-    _zuhrController.dispose();
+    _zoharController.dispose();
     _asrController.dispose();
     _maghribController.dispose();
     _ishaController.dispose();
@@ -146,8 +188,85 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
     _firebaseReady = true;
   }
 
+  Future<void> _showChangeNameDialog() async {
+    final ctrl = TextEditingController(text: _contributorNameController.text);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Change your name'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            labelText: 'Your name',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (ctrl.text.trim().isNotEmpty) Navigator.pop(ctx, true);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      final newName = ctrl.text.trim();
+      setState(() {
+        _contributorNameController.text = newName;
+        _savedName = newName;
+      });
+      await context.read<AppState>().setContributorName(newName);
+      // Update leaderboard name in Firestore if phone is verified
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null && _phoneVerified) {
+        final cityName = widget.mosque.city ?? '';
+        if (cityName.isNotEmpty) {
+          await FirebaseFirestore.instance
+              .collection('top_contributors')
+              .doc(cityContributorDocId(cityName, user.uid))
+              .set({'name': newName}, SetOptions(merge: true));
+        }
+      }
+    }
+  }
+
+  Future<void> _updateFirebaseContributorName(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null && user.displayName?.trim() != trimmed) {
+      try {
+        await user.updateDisplayName(trimmed);
+      } catch (_) {}
+    }
+  }
+
+  // Links phone credential to anonymous session; falls back to sign-in if
+  // the phone is already registered to another account.
+  Future<void> _signInOrLink(PhoneAuthCredential cred) async {
+    final current = FirebaseAuth.instance.currentUser;
+    if (current != null && current.isAnonymous) {
+      try {
+        await current.linkWithCredential(cred);
+        return;
+      } on FirebaseAuthException catch (e) {
+        if (e.code != 'credential-already-in-use') rethrow;
+      }
+    }
+    await FirebaseAuth.instance.signInWithCredential(cred);
+  }
+
   Future<void> _sendOtp() async {
-    final phone = _normalizedPhone(_phoneController.text);
+    if (_otpCooldownSeconds > 0) return;
+    final phone = PhoneUtils.normalize(_phoneController.text);
     if (phone == null) {
       setState(() => _otpStatus = 'Enter a valid mobile number.');
       return;
@@ -162,7 +281,7 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: phone,
         verificationCompleted: (cred) async {
-          await FirebaseAuth.instance.signInWithCredential(cred);
+          await _signInOrLink(cred);
           await _markPhoneVerified(_firebaseAuthPhone() ?? phone);
         },
         verificationFailed: (e) {
@@ -176,6 +295,7 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
             _otpSent = true;
             _otpStatus = 'OTP sent to your number.';
           });
+          _startOtpCooldown();
         },
         codeAutoRetrievalTimeout: (id) => _verificationId = id,
         timeout: const Duration(seconds: 60),
@@ -194,27 +314,33 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
     if (mounted) setState(() => _verifyingOtp = true);
     try {
       final cred = PhoneAuthProvider.credential(
-          verificationId: _verificationId!,
-          smsCode: _otpController.text.trim());
-      await FirebaseAuth.instance.signInWithCredential(cred);
+        verificationId: _verificationId!,
+        smsCode: _otpController.text.trim(),
+      );
+      await _signInOrLink(cred);
+      // Force-refresh the ID token so the phone_number claim is available
+      // immediately for the Firestore verifiedPhone() rule check.
+      await FirebaseAuth.instance.currentUser?.getIdToken(true);
       final phone = _firebaseAuthPhone() ?? _pendingVerificationPhone;
       if (phone == null) {
         throw FirebaseAuthException(code: 'missing-phone-number');
       }
       await _markPhoneVerified(phone);
     } catch (_) {
-      if (mounted) setState(() => _otpStatus = 'Invalid OTP. Please try again.');
+      if (mounted) {
+        setState(() => _otpStatus = 'Invalid OTP. Please try again.');
+      }
     } finally {
       if (mounted) setState(() => _verifyingOtp = false);
     }
   }
 
   Future<void> _markPhoneVerified(String phone) async {
-    final normalized = _normalizedPhone(phone);
+    final normalized = PhoneUtils.normalize(phone);
     if (normalized == null) {
       throw FirebaseAuthException(code: 'invalid-phone-number');
     }
-    await OtpSession.saveVerifiedPhone(normalized);
+    await context.read<AppState>().markPhoneVerified(normalized);
     if (!mounted) return;
     setState(() {
       _verifiedPhone = normalized;
@@ -224,17 +350,9 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
     });
   }
 
-  String? _normalizedPhone(String value) {
-    final normalized = value.replaceAll(RegExp(r'\s+'), '');
-    if (RegExp(r'^\+[1-9]\d{7,14}$').hasMatch(normalized)) {
-      return normalized;
-    }
-    return null;
-  }
-
   String? _firebaseAuthPhone() {
     final phone = FirebaseAuth.instance.currentUser?.phoneNumber;
-    return phone == null ? null : _normalizedPhone(phone);
+    return phone == null ? null : PhoneUtils.normalize(phone);
   }
 
   Future<void> _captureCurrentLocation() async {
@@ -243,8 +361,11 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
     if (!mounted) return;
     if (!location.isCurrentLocation) {
       setState(() => _capturingLocation = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('GPS unavailable. Please enable location services.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('GPS unavailable. Please enable location services.'),
+        ),
+      );
       return;
     }
     setState(() {
@@ -271,7 +392,8 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
     final patterns = [
       RegExp(r'@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)'),
       RegExp(
-          r'[?&](?:q|query|ll|destination)=(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)'),
+        r'[?&](?:q|query|ll|destination)=(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)',
+      ),
       RegExp(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$'),
     ];
     for (final pattern in patterns) {
@@ -290,8 +412,10 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
         .trim()
         .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
         .replaceAll(RegExp(r'^-+|-+$'), '');
-    final base = '${clean(cityName)}-${clean(mosqueName)}'
-        .replaceAll(RegExp(r'^-+|-+$'), '');
+    final base = '${clean(cityName)}-${clean(mosqueName)}'.replaceAll(
+      RegExp(r'^-+|-+$'),
+      '',
+    );
     return base.isEmpty ? 'mosque-unknown' : base;
   }
 
@@ -308,37 +432,93 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
     return double.tryParse(controller.text.trim());
   }
 
+  IslamicTimingService _timingServiceForMosque() {
+    final lat = _capturedLat ??
+        _readCoordinate(_latitudeController) ??
+        widget.mosque.latitude;
+    final lng = _capturedLng ??
+        _readCoordinate(_longitudeController) ??
+        widget.mosque.longitude;
+    if (_validCoordinates(lat, lng)) {
+      return IslamicTimingService(latitude: lat!, longitude: lng!);
+    }
+
+    CityInfo? city;
+    final cityKey = (widget.mosque.city ?? '').trim().toLowerCase();
+    for (final candidate in indianCities) {
+      if (candidate.name.toLowerCase() == cityKey) {
+        city = candidate;
+        break;
+      }
+    }
+    return city == null
+        ? IslamicTimingService()
+        : IslamicTimingService(
+            latitude: city.latitude,
+            longitude: city.longitude,
+          );
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (!_phoneVerified) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Please verify your mobile number first.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please verify your mobile number first.'),
+        ),
+      );
       return;
     }
-    await _saveName();
+    await _ensureFirebase();
+    await _updateFirebaseContributorName(_contributorNameController.text);
     final verifiedPhone =
         _verifiedPhone ?? await OtpSession.loadVerifiedPhone();
     if (!mounted) return;
-    if (verifiedPhone == null || _normalizedPhone(verifiedPhone) == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Please verify your mobile number again.')));
+    if (verifiedPhone == null || PhoneUtils.normalize(verifiedPhone) == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please verify your mobile number again.'),
+        ),
+      );
+      return;
+    }
+    // Guard: confirm Firebase Auth token actually carries phone_number before
+    // writing to Firestore. If the token is from a different session the rule
+    // will deny the write. Show a clear message and reset so the user can
+    // re-verify without confusion.
+    final firebasePhone = _firebaseAuthPhone();
+    if (firebasePhone != verifiedPhone) {
+      if (!mounted) return;
+      setState(() {
+        _phoneVerified = false;
+        _verifiedPhone = null;
+        _otpStatus = 'Session expired. Please verify OTP again.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Phone session expired. Please tap Send OTP to verify again.'),
+        ),
+      );
       return;
     }
     final isLocationEdit = _issueType == 'location' || _issueType == 'both';
     if ((_issueType == 'timing' || _issueType == 'both') &&
         _fajrController.text.trim().isEmpty &&
-        _zuhrController.text.trim().isEmpty &&
+        _zoharController.text.trim().isEmpty &&
         _asrController.text.trim().isEmpty &&
         _maghribController.text.trim().isEmpty &&
         _ishaController.text.trim().isEmpty &&
         _jumaController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Please enter at least one prayer time.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter at least one prayer time.')),
+      );
       return;
     }
     if (_issueType == 'name' && _nameController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Please enter the correct mosque name.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter the correct mosque name.')),
+      );
       return;
     }
     final suggestedLat = _capturedLat ?? _readCoordinate(_latitudeController);
@@ -350,10 +530,23 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
         !hasCoordinates &&
         !hasAddress &&
         !hasGoogleLocation) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content:
-              Text('Please add coordinates, Google Maps link, or address.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Please add coordinates, Google Maps link, or address.',
+          ),
+        ),
+      );
       return;
+    }
+    if (_issueType == 'timing' || _issueType == 'both') {
+      final invalidTimingMessage = _invalidSubmittedTimingMessage(
+        _normalizedTimingInputs(),
+      );
+      if (invalidTimingMessage != null) {
+        await _showTimingValidationDialog(invalidTimingMessage);
+        return;
+      }
     }
     if (_issueType == 'delete') {
       final confirm = await showDialog<bool>(
@@ -361,15 +554,18 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
         builder: (ctx) => AlertDialog(
           title: const Text('Delete Mosque?'),
           content: Text(
-              'Permanently remove "${widget.mosque.name}"? This cannot be undone.'),
+            'Permanently remove "${widget.mosque.name}"? This cannot be undone.',
+          ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
             FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Delete')),
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Delete'),
+            ),
           ],
         ),
       );
@@ -379,19 +575,31 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
     try {
       await _ensureFirebase();
       final contributorName = _contributorNameController.text.trim();
-      final data = <String, dynamic>{
+      final city = (widget.mosque.city ?? '').trim();
+      final area = _areaController.text.trim().isNotEmpty
+          ? _areaController.text.trim()
+          : widget.mosque.area;
+      final docId = widget.mosque.firestoreDocId ??
+          _suggestEditMosqueDocId(widget.mosque.name, city);
+      final mosqueRef =
+          FirebaseFirestore.instance.collection('mosques').doc(docId);
+      final existingMosqueSnap = await mosqueRef.get();
+      final existingMosqueData = existingMosqueSnap.data();
+
+      // Log to mosque_edits for audit history
+      final logData = <String, dynamic>{
         'mosque_name': widget.mosque.name,
-        'city': widget.mosque.city,
-        'area': _areaController.text.trim().isNotEmpty
-            ? _areaController.text.trim()
-            : widget.mosque.area,
+        'city': city,
+        'area': area,
         if (contributorName.isNotEmpty) 'contributor_name': contributorName,
         if (isLocationEdit) 'address': _addressController.text.trim(),
         if (isLocationEdit)
           'google_location': _googleLocationController.text.trim(),
-        'edit_type': isLocationEdit && _issueType == 'location'
-            ? 'location'
-            : 'timing_or_location',
+        'edit_type': _issueType == 'delete'
+            ? 'delete'
+            : (isLocationEdit && _issueType == 'location'
+                ? 'location'
+                : 'timing_or_location'),
         'issue_type': _issueType,
         if (isLocationEdit) 'is_at_mosque_now': _isAtMosqueNow,
         if (isLocationEdit && _capturedLat != null)
@@ -407,91 +615,163 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
         else
           'suggested_by_phone': verifiedPhone,
         if (_issueType == 'name') 'suggested_name': _nameController.text.trim(),
-        'status': 'submitted',
+        // Audit fields — score is awarded by Cloud Function, not client
+        'submitted_by_uid': FirebaseAuth.instance.currentUser?.uid,
+        'submittedAt': FieldValue.serverTimestamp(),
+        'scoreAwarded': false,
+        // Self-governance: edits go live immediately on phone verification.
+        'status': 'live',
+        'reportCount': 0,
         'created_at': FieldValue.serverTimestamp(),
       };
+
+      // Build previousValue snapshot from the existing mosque document
+      final previousValueMap = <String, dynamic>{};
+      if (_issueType == 'timing' || _issueType == 'both') {
+        final existing = existingMosqueData?['timings'];
+        if (existing is Map) {
+          for (final k in ['fajr', 'zohar', 'asr', 'maghrib', 'isha', 'juma']) {
+            if (existing[k] != null) previousValueMap[k] = existing[k];
+          }
+        }
+      }
+      if (_issueType == 'name') {
+        previousValueMap['name'] = existingMosqueData?['name'];
+      }
+      if (isLocationEdit) {
+        if (existingMosqueData?['latitude'] != null) {
+          previousValueMap['latitude'] = existingMosqueData!['latitude'];
+        }
+        if (existingMosqueData?['longitude'] != null) {
+          previousValueMap['longitude'] = existingMosqueData!['longitude'];
+        }
+        if (existingMosqueData?['address'] != null) {
+          previousValueMap['address'] = existingMosqueData!['address'];
+        }
+      }
+      if (previousValueMap.isNotEmpty) {
+        logData['previousValue'] = previousValueMap;
+      }
+
       if (_issueType == 'timing' || _issueType == 'both') {
         final normalized = {
-          'fajr':
-              normalizePrayerTimingInput('fajr', _fajrController.text.trim()),
-          'zohar':
-              normalizePrayerTimingInput('zohar', _zuhrController.text.trim()),
+          'fajr': normalizePrayerTimingInput(
+            'fajr',
+            _fajrController.text.trim(),
+          ),
+          'zohar': normalizePrayerTimingInput(
+            'zohar',
+            _zoharController.text.trim(),
+          ),
           'asr': normalizePrayerTimingInput('asr', _asrController.text.trim()),
           'maghrib': normalizePrayerTimingInput(
-              'maghrib', _maghribController.text.trim()),
-          'isha':
-              normalizePrayerTimingInput('isha', _ishaController.text.trim()),
-          'juma':
-              normalizePrayerTimingInput('juma', _jumaController.text.trim()),
+            'maghrib',
+            _maghribController.text.trim(),
+          ),
+          'isha': normalizePrayerTimingInput(
+            'isha',
+            _ishaController.text.trim(),
+          ),
+          'juma': normalizePrayerTimingInput(
+            'juma',
+            _jumaController.text.trim(),
+          ),
         };
+        final newValueMap = <String, dynamic>{};
         normalized.forEach((key, value) {
           if (value != null) {
-            data[key] = value;
+            logData[key] = value;
+            newValueMap[key] = value;
           }
         });
+        if (newValueMap.isNotEmpty) logData['newValue'] = newValueMap;
       }
-      await FirebaseFirestore.instance.collection('mosque_edits').add(data);
-
-      // Timing edits: directly update mosques collection for instant visibility
-      if (_issueType == 'timing' || _issueType == 'both') {
-        final timingsToWrite = <String, String>{};
-        final timingPairs = {
-          'fajr': _fajrController.text.trim(),
-          'zohar': _zuhrController.text.trim(),
-          'asr': _asrController.text.trim(),
-          'maghrib': _maghribController.text.trim(),
-          'isha': _ishaController.text.trim(),
-          'juma': _jumaController.text.trim(),
+      if (_issueType == 'name') {
+        logData['newValue'] = {'name': _nameController.text.trim()};
+      }
+      if (isLocationEdit && hasCoordinates) {
+        logData['newValue'] = {
+          'latitude': suggestedLat,
+          'longitude': suggestedLng
         };
-        for (final entry in timingPairs.entries) {
-          if (entry.value.isEmpty) continue;
-          final v = normalizePrayerTimingInput(entry.key, entry.value);
-          if (v != null) timingsToWrite[entry.key] = v;
-        }
-        if (timingsToWrite.isNotEmpty) {
-          final city = widget.mosque.city ?? '';
-          // Use the actual Firestore doc ID if available, else generate one
-          final docId = widget.mosque.firestoreDocId ??
-              _suggestEditMosqueDocId(widget.mosque.name, city);
-          final docRef = FirebaseFirestore.instance
-              .collection('mosques')
-              .doc(docId);
-          // Ensure document exists with base fields
-          await docRef.set({
-            'name': widget.mosque.name,
-            'city': city.isNotEmpty ? city : 'Moradabad',
-            'area': _areaController.text.trim().isNotEmpty
-                ? _areaController.text.trim()
-                : widget.mosque.area,
-            if (contributorName.isNotEmpty)
-              'timing_verified_by_name': contributorName,
-            'timing_verification_status': 'source_verified',
-            'verified_by_phone_private': verifiedPhone,
-            'timing_updated_at': FieldValue.serverTimestamp(),
-            if (widget.mosque.placeId != null)
-              'place_id': widget.mosque.placeId!,
-          }, SetOptions(merge: true));
-          // Update individual timing fields — preserves other prayers already set
-          final timingUpdates = <String, dynamic>{
-            for (final e in timingsToWrite.entries)
-              'timings.${e.key}': e.value,
-          };
-          await docRef.update(timingUpdates);
-        }
+      }
+
+      await FirebaseFirestore.instance.collection('mosque_edits').add(logData);
+
+      // Score is awarded by Cloud Function (autoApproveMosqueEdit) after
+      // it validates the edit, preventing client-side score manipulation.
+
+      final submittedName = _contributorNameController.text.trim();
+      if (submittedName.isNotEmpty && mounted) {
+        await context.read<AppState>().setContributorName(submittedName);
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Submitted! Timings updated instantly.')));
+      final msg = _issueType == 'delete'
+          ? 'JazakAllah! Mosque removed.'
+          : 'JazakAllah! Changes submitted.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
       Navigator.of(context).pop();
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
           content: Text(
-              'Could not submit. Please check your internet connection.')));
+            e.toString().contains('permission')
+                ? 'Permission denied. Please verify your phone first.'
+                : 'Could not submit. Please check your internet connection.',
+          ),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  Map<String, String> _normalizedTimingInputs() {
+    final normalized = <String, String>{};
+    final timingPairs = {
+      'fajr': _fajrController.text.trim(),
+      'zohar': _zoharController.text.trim(),
+      'asr': _asrController.text.trim(),
+      'maghrib': _maghribController.text.trim(),
+      'isha': _ishaController.text.trim(),
+      'juma': _jumaController.text.trim(),
+    };
+    for (final entry in timingPairs.entries) {
+      if (entry.value.isEmpty) continue;
+      final value = normalizePrayerTimingInput(entry.key, entry.value);
+      if (value != null) normalized[entry.key] = value;
+    }
+    return normalized;
+  }
+
+  String? _invalidSubmittedTimingMessage(Map<String, String> timings) {
+    final validator = PrayerTimeValidator(
+      service: _timingServiceForMosque(),
+      cityName: widget.mosque.city ?? '',
+    );
+    for (final entry in timings.entries) {
+      final result = validator.validateDetailed(entry.key, entry.value);
+      if (!result.isValid) return result.message;
+    }
+    return null;
+  }
+
+  Future<void> _showTimingValidationDialog(String message) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Check prayer time'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _timeField(TextEditingController ctrl, String label) {
@@ -517,7 +797,7 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
     final showDelete = _issueType == 'delete';
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Report an Issue')),
+      appBar: AppBar(title: const Text('Update Mosque Info')),
       body: SafeArea(
         child: Form(
           key: _formKey,
@@ -525,36 +805,33 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
             children: [
               // ── Mosque Info ──────────────────────────────────
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Icon(Icons.mosque, size: 20, color: Color(0xFF0F7C68)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.mosque, size: 20, color: Color(0xFF0F7C68)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(widget.mosque.name,
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w900)),
-                        Text(widget.mosque.area,
-                            style: const TextStyle(
-                                color: Colors.black54, fontSize: 13)),
-                      ]),
-                ),
-              ]),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _contributorNameController,
-                decoration: const InputDecoration(
-                  labelText: 'Your name',
-                  hintText: 'Mohammad Ali',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.person_outline, size: 18),
-                  isDense: true,
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                ),
+                        Text(
+                          widget.mosque.name,
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w900),
+                        ),
+                        Text(
+                          widget.mosque.area,
+                          style: const TextStyle(
+                            color: Colors.black54,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 12),
 
@@ -563,26 +840,35 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
                 isExpanded: true,
                 initialValue: _issueType,
                 decoration: const InputDecoration(
-                    labelText: 'What needs to be fixed?',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                  labelText: 'What needs to be fixed?',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 12,
+                  ),
+                ),
                 items: const [
                   DropdownMenuItem(
-                      value: 'timing',
-                      child: Text('Prayer times are incorrect')),
+                    value: 'timing',
+                    child: Text('Prayer times are incorrect'),
+                  ),
                   DropdownMenuItem(
-                      value: 'location',
-                      child: Text('Mosque location is incorrect')),
+                    value: 'location',
+                    child: Text('Mosque location is incorrect'),
+                  ),
                   DropdownMenuItem(
-                      value: 'both',
-                      child: Text('Both — timings and location')),
+                    value: 'both',
+                    child: Text('Both — timings and location'),
+                  ),
                   DropdownMenuItem(
-                      value: 'name', child: Text('Mosque name is incorrect')),
+                    value: 'name',
+                    child: Text('Mosque name is incorrect'),
+                  ),
                   DropdownMenuItem(
-                      value: 'delete',
-                      child: Text('Remove this mosque (duplicate / invalid)')),
+                    value: 'delete',
+                    child: Text('Remove this mosque (duplicate / invalid)'),
+                  ),
                 ],
                 onChanged: (value) =>
                     setState(() => _issueType = value ?? _issueType),
@@ -595,12 +881,15 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
                 TextFormField(
                   controller: _nameController,
                   decoration: const InputDecoration(
-                      labelText: 'Correct mosque name',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.edit, size: 18),
-                      isDense: true,
-                      contentPadding:
-                          EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                    labelText: 'Correct mosque name',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.edit, size: 18),
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
+                  ),
                 ),
               ],
               // ── Delete warning
@@ -609,17 +898,22 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                      color: const Color(0xFFFFEBEE),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFEF9A9A))),
-                  child: const Row(children: [
-                    Icon(Icons.warning_amber, color: Colors.red, size: 20),
-                    SizedBox(width: 8),
-                    Expanded(
+                    color: const Color(0xFFFFEBEE),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFEF9A9A)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.warning_amber, color: Colors.red, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
                         child: Text(
-                            'This mosque will be permanently removed. Only proceed if it is a duplicate or does not exist.',
-                            style: TextStyle(fontSize: 13, color: Colors.red))),
-                  ]),
+                          'This mosque will be permanently removed. Only proceed if it is a duplicate or does not exist.',
+                          style: TextStyle(fontSize: 13, color: Colors.red),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
               // ── Area field (always visible except delete) ─────
@@ -627,13 +921,16 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
                 TextFormField(
                   controller: _areaController,
                   decoration: const InputDecoration(
-                      labelText: 'Area / Locality',
-                      hintText: 'e.g. Civil Lines, Sambhi Gate',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.location_on_outlined, size: 18),
-                      isDense: true,
-                      contentPadding:
-                          EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                    labelText: 'Area / Locality',
+                    hintText: 'e.g. Civil Lines, Sambhi Gate',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.location_on_outlined, size: 18),
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
+                  ),
                 ),
               ],
               const SizedBox(height: 12),
@@ -643,46 +940,84 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                      color: const Color(0xFFF1F8E9),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFF81C784))),
+                    color: const Color(0xFFF1F8E9),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF81C784)),
+                  ),
                   child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Row(children: [
-                          Icon(Icons.access_time,
-                              color: Color(0xFF2E7D32), size: 16),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(
+                            Icons.access_time,
+                            color: Color(0xFF2E7D32),
+                            size: 16,
+                          ),
                           SizedBox(width: 6),
-                          Text('Prayer Times',
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF2E7D32),
-                                  fontSize: 13)),
+                          Text(
+                            'Prayer Times',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2E7D32),
+                              fontSize: 13,
+                            ),
+                          ),
                           Spacer(),
-                          Text('Tap a field to pick time',
-                              style: TextStyle(
-                                  fontSize: 11, color: Colors.black45)),
-                        ]),
-                        const SizedBox(height: 8),
-                        // Row 1: Fajr, Zuhr, Asr
-                        Row(children: [
+                          Text(
+                            'Tap a field to pick time',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.black45,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      BoardScanButton(
+                        fajrCtrl: _fajrController,
+                        zoharCtrl: _zoharController,
+                        asrCtrl: _asrController,
+                        maghribCtrl: _maghribController,
+                        ishaCtrl: _ishaController,
+                        jumaCtrl: _jumaController,
+                        timingService: _timingServiceForMosque(),
+                        onLocationCaptured: (lat, lng) {
+                          setState(() {
+                            _capturedLat = lat;
+                            _capturedLng = lng;
+                            _latitudeController.text = lat.toStringAsFixed(6);
+                            _longitudeController.text = lng.toStringAsFixed(6);
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      // Row 1: Fajr, Zuhr, Asr
+                      Row(
+                        children: [
                           Expanded(child: _timeField(_fajrController, 'Fajr')),
                           const SizedBox(width: 6),
-                          Expanded(child: _timeField(_zuhrController, 'Zuhr')),
+                          Expanded(child: _timeField(_zoharController, 'Zuhr')),
                           const SizedBox(width: 6),
                           Expanded(child: _timeField(_asrController, 'Asr')),
-                        ]),
-                        const SizedBox(height: 6),
-                        // Row 2: Maghrib, Isha, Juma
-                        Row(children: [
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      // Row 2: Maghrib, Isha, Jumu'ah
+                      Row(
+                        children: [
                           Expanded(
-                              child: _timeField(_maghribController, 'Maghrib')),
+                            child: _timeField(_maghribController, 'Maghrib'),
+                          ),
                           const SizedBox(width: 6),
                           Expanded(child: _timeField(_ishaController, 'Isha')),
                           const SizedBox(width: 6),
-                          Expanded(child: _timeField(_jumaController, 'Juma')),
-                        ]),
-                      ]),
+                          Expanded(
+                              child: _timeField(_jumaController, "Jumu'ah")),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 12),
               ],
@@ -690,100 +1025,129 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
               // ── Location section ─────────────────────────────
               if (showLocation) ...[
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
-                      color: const Color(0xFFE3F2FD),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFF90CAF9))),
+                    color: const Color(0xFFE3F2FD),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF90CAF9)),
+                  ),
                   child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                          title: const Text('I am at this mosque right now',
-                              style: TextStyle(
-                                  fontSize: 13, fontWeight: FontWeight.w600)),
-                          subtitle: const Text(
-                              'Enable to capture your GPS coordinates for the mosque.',
-                              style: TextStyle(fontSize: 11)),
-                          value: _isAtMosqueNow,
-                          onChanged: (value) =>
-                              setState(() => _isAtMosqueNow = value ?? false),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: const Text(
+                          'I am at this mosque right now',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                        if (_isAtMosqueNow) ...[
-                          Row(children: [
+                        subtitle: const Text(
+                          'Enable to capture your GPS coordinates for the mosque.',
+                          style: TextStyle(fontSize: 11),
+                        ),
+                        value: _isAtMosqueNow,
+                        onChanged: (value) =>
+                            setState(() => _isAtMosqueNow = value ?? false),
+                      ),
+                      if (_isAtMosqueNow) ...[
+                        Row(
+                          children: [
                             FilledButton.tonalIcon(
-                                onPressed: _capturingLocation
-                                    ? null
-                                    : _captureCurrentLocation,
-                                icon: Icon(
-                                    _capturingLocation
-                                        ? Icons.hourglass_empty
-                                        : Icons.my_location,
-                                    size: 16),
-                                label: Text(
-                                    _capturingLocation
-                                        ? 'Capturing...'
-                                        : 'Capture My Location',
-                                    style: const TextStyle(fontSize: 13))),
+                              onPressed: _capturingLocation
+                                  ? null
+                                  : _captureCurrentLocation,
+                              icon: Icon(
+                                _capturingLocation
+                                    ? Icons.hourglass_empty
+                                    : Icons.my_location,
+                                size: 16,
+                              ),
+                              label: Text(
+                                _capturingLocation
+                                    ? 'Capturing...'
+                                    : 'Capture My Location',
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            ),
                             if (_capturedLocationText != null) ...[
                               const SizedBox(width: 8),
                               Expanded(
-                                child: Text(_capturedLocationText!,
-                                    style: const TextStyle(
-                                        color: Color(0xFF0F7C68), fontSize: 11),
-                                    overflow: TextOverflow.ellipsis),
+                                child: Text(
+                                  _capturedLocationText!,
+                                  style: const TextStyle(
+                                    color: Color(0xFF0F7C68),
+                                    fontSize: 11,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             ],
-                          ]),
-                          const SizedBox(height: 4),
-                        ],
-                        const SizedBox(height: 8),
-                        TextFormField(
-                          controller: _googleLocationController,
-                          keyboardType: TextInputType.url,
-                          onChanged: _syncCoordinatesFromGoogleText,
-                          decoration: const InputDecoration(
-                              labelText: 'Google Maps link or plus code',
-                              hintText:
-                                  'Paste maps.app.goo.gl link, @lat,lng, or plus code',
-                              border: OutlineInputBorder(),
-                              prefixIcon: Icon(Icons.link, size: 18),
-                              isDense: true,
-                              contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 12)),
+                          ],
                         ),
-                        const SizedBox(height: 8),
-                        TextFormField(
-                          controller: _addressController,
-                          minLines: 1,
-                          maxLines: 2,
-                          decoration: const InputDecoration(
-                              labelText: 'Correct mosque address',
-                              hintText: 'Nearby landmark / Google address',
-                              border: OutlineInputBorder(),
-                              prefixIcon: Icon(Icons.place_outlined, size: 18),
-                              isDense: true,
-                              contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 12)),
+                        const SizedBox(height: 4),
+                      ],
+                      const SizedBox(height: 8),
+                      TextFormField(
+                        controller: _googleLocationController,
+                        keyboardType: TextInputType.url,
+                        onChanged: _syncCoordinatesFromGoogleText,
+                        decoration: const InputDecoration(
+                          labelText: 'Google Maps link or plus code',
+                          hintText:
+                              'Paste maps.app.goo.gl link, @lat,lng, or plus code',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.link, size: 18),
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                         ),
-                        const SizedBox(height: 8),
-                        Row(children: [
+                      ),
+                      const SizedBox(height: 8),
+                      TextFormField(
+                        controller: _addressController,
+                        minLines: 1,
+                        maxLines: 2,
+                        decoration: const InputDecoration(
+                          labelText: 'Correct mosque address',
+                          hintText: 'Nearby landmark / Google address',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.place_outlined, size: 18),
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
                           Expanded(
                             child: TextFormField(
                               controller: _latitudeController,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                      decimal: true, signed: true),
+                                decimal: true,
+                                signed: true,
+                              ),
                               decoration: const InputDecoration(
-                                  labelText: 'Latitude',
-                                  hintText: '28.838600',
-                                  border: OutlineInputBorder(),
-                                  isDense: true,
-                                  contentPadding: EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 10)),
+                                labelText: 'Latitude',
+                                hintText: '28.838600',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 10,
+                                ),
+                              ),
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -792,114 +1156,229 @@ class _SuggestEditScreenState extends State<SuggestEditScreen> {
                               controller: _longitudeController,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                      decimal: true, signed: true),
+                                decimal: true,
+                                signed: true,
+                              ),
                               decoration: const InputDecoration(
-                                  labelText: 'Longitude',
-                                  hintText: '78.773300',
-                                  border: OutlineInputBorder(),
-                                  isDense: true,
-                                  contentPadding: EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 10)),
+                                labelText: 'Longitude',
+                                hintText: '78.773300',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 10,
+                                ),
+                              ),
                             ),
                           ),
-                        ]),
-                      ]),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 12),
               ],
 
-              // ── Phone + OTP ──────────────────────────────────
+              // ── Contributor name + Phone + OTP ───────────────
+              const Text(
+                'Phone verification ensures only real people update timings.',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _contributorNameController,
+                readOnly: _savedName.isNotEmpty,
+                decoration: InputDecoration(
+                  labelText: 'Your name *',
+                  hintText: 'Mohammad Ali',
+                  border: const OutlineInputBorder(),
+                  prefixIcon: const Icon(Icons.person_outline, size: 18),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 12,
+                  ),
+                  filled: _savedName.isNotEmpty,
+                  fillColor:
+                      _savedName.isNotEmpty ? const Color(0xFFF0F0F0) : null,
+                  suffixIcon: _savedName.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.edit_outlined, size: 18),
+                          tooltip: 'Change name',
+                          onPressed: _showChangeNameDialog,
+                        )
+                      : null,
+                ),
+                validator: (value) => value == null || value.trim().isEmpty
+                    ? 'Enter your name'
+                    : null,
+              ),
+              const SizedBox(height: 10),
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                    color: const Color(0xFFEAF7F3),
-                    borderRadius: BorderRadius.circular(8)),
+                  color: const Color(0xFFEAF7F3),
+                  borderRadius: BorderRadius.circular(8),
+                ),
                 child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(children: [
-                        Icon(_phoneVerified ? Icons.verified : Icons.sms,
-                            color: const Color(0xFF0F7C68), size: 18),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TextFormField(
-                            controller: _phoneController,
-                            enabled: !_phoneVerified && !_otpSent,
-                            keyboardType: TextInputType.phone,
-                            decoration: const InputDecoration(
-                                labelText: 'Mobile number',
-                                hintText: '+919876543210',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                                contentPadding: EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 10)),
-                            validator: (v) => _normalizedPhone(v ?? '') == null
-                                ? 'Enter full number with country code (+91...)'
-                                : null,
-                          ),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          _phoneVerified ? Icons.verified : Icons.sms,
+                          color: const Color(0xFF0F7C68),
+                          size: 18,
                         ),
                         const SizedBox(width: 8),
-                        FilledButton(
-                            onPressed:
-                                _sendingOtp || _phoneVerified ? null : _sendOtp,
-                            child: Text(
-                                _sendingOtp
-                                    ? '...'
-                                    : _otpSent
-                                        ? 'Resend'
-                                        : 'Send OTP',
-                                style: const TextStyle(fontSize: 13))),
-                      ]),
-                      if (_otpSent && !_phoneVerified) ...[
-                        const SizedBox(height: 8),
-                        Row(children: [
-                          Expanded(
-                            child: TextFormField(
-                              controller: _otpController,
-                              keyboardType: TextInputType.number,
-                              decoration: const InputDecoration(
-                                  labelText: 'Enter OTP',
-                                  border: OutlineInputBorder(),
-                                  isDense: true,
-                                  contentPadding: EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 10)),
-                            ),
+                        Expanded(
+                          child: Text(
+                            _phoneVerified
+                                ? 'Mobile verified'
+                                : _otpSent
+                                    ? 'OTP sent'
+                                    : 'Mobile verification',
+                            style: const TextStyle(fontWeight: FontWeight.w800),
                           ),
-                          const SizedBox(width: 8),
-                          FilledButton(
-                              onPressed: _verifyingOtp ? null : _verifyOtp,
-                              child: Text(
-                                  _verifyingOtp ? 'Checking...' : 'Verify')),
-                        ]),
+                        ),
                       ],
-                      if (_otpStatus != null) ...[
-                        const SizedBox(height: 6),
-                        Text(_otpStatus!,
-                            style: TextStyle(
-                                color: _phoneVerified
-                                    ? const Color(0xFF0F7C68)
-                                    : Colors.black54,
-                                fontSize: 12)),
+                    ),
+                    const SizedBox(height: 10),
+                    if (!_otpSent || _phoneVerified) ...[
+                      TextFormField(
+                        controller: _phoneController,
+                        enabled: !_phoneVerified,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(
+                          labelText: 'Mobile number',
+                          hintText: '+919876543210',
+                          prefixIcon: Icon(Icons.phone, size: 18),
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 10,
+                          ),
+                        ),
+                        validator: (v) => PhoneUtils.normalize(v ?? '') == null
+                            ? 'Enter full number with country code (+91...)'
+                            : null,
+                      ),
+                      if (!_phoneVerified) ...[
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton(
+                            onPressed: (_sendingOtp || _otpCooldownSeconds > 0)
+                                ? null
+                                : _sendOtp,
+                            child: _sendingOtp
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : Text(
+                                    _otpCooldownSeconds > 0
+                                        ? 'Resend in ${_otpCooldownSeconds}s'
+                                        : 'Send OTP',
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                          ),
+                        ),
                       ],
-                    ]),
+                    ] else ...[
+                      TextFormField(
+                        controller: _otpController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Enter OTP',
+                          prefixIcon: Icon(Icons.sms, size: 18),
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 10,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton(
+                          onPressed: _verifyingOtp ? null : _verifyOtp,
+                          child: _verifyingOtp
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text('Verify'),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: (_sendingOtp || _otpCooldownSeconds > 0)
+                            ? null
+                            : _sendOtp,
+                        child: Text(
+                          _otpCooldownSeconds > 0
+                              ? 'Resend in ${_otpCooldownSeconds}s'
+                              : 'Resend OTP',
+                        ),
+                      ),
+                    ],
+                    if (_phoneVerified) ...[
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Mobile verified',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Color(0xFF0F7C68),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                    if (_otpStatus != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        _otpStatus!,
+                        style: TextStyle(
+                          color: _phoneVerified
+                              ? const Color(0xFF0F7C68)
+                              : Colors.black54,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
               const SizedBox(height: 14),
 
               // ── Submit ───────────────────────────────────────
               FilledButton.icon(
-                  onPressed: _submitting ? null : _submit,
-                  style: showDelete
-                      ? FilledButton.styleFrom(backgroundColor: Colors.red)
-                      : null,
-                  icon: Icon(showDelete ? Icons.delete_forever : Icons.send,
-                      size: 18),
-                  label: Text(
-                      _submitting
-                          ? (showDelete ? 'Deleting...' : 'Submitting...')
-                          : (showDelete
-                              ? 'Delete This Mosque'
-                              : 'Submit Report'),
-                      style: const TextStyle(fontSize: 15))),
+                onPressed: _submitting ? null : _submit,
+                style: showDelete
+                    ? FilledButton.styleFrom(backgroundColor: Colors.red)
+                    : null,
+                icon: Icon(
+                  showDelete ? Icons.delete_forever : Icons.send,
+                  size: 18,
+                ),
+                label: Text(
+                  _submitting
+                      ? (showDelete ? 'Deleting...' : 'Submitting...')
+                      : (showDelete ? 'Delete This Mosque' : 'Save Changes'),
+                  style: const TextStyle(fontSize: 15),
+                ),
+              ),
             ],
           ),
         ),

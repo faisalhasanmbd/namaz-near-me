@@ -156,7 +156,7 @@ class AppLocalizationsAr extends AppLocalizations {
   String get autoCalculated => 'يُحسب تلقائياً يومياً.';
 
   @override
-  String get initiated => 'بمبادرة من Food4U / FOODOMATIC مراد آباد.';
+  String get initiated => 'Community prayer timing app.';
 
   @override
   String get searchCity => 'ابحث عن مدينة أو ولاية...';

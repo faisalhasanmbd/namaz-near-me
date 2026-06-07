@@ -4,6 +4,10 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Voice Assistant needs the microphone to hear your prayer time questions.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Voice Assistant uses speech recognition to understand your questions about prayer times and nearby mosques.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -30,6 +34,23 @@
 	<false/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Namaz Near Me uses your location to find nearby masjids and jamaat timings.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Namaz Near Me uses your location to find nearby masjids and jamaat timings.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Namaz Near Me uses the camera to scan prayer time boards when you choose to update timings.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Namaz Near Me saves scanned prayer board images to your photo library.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+					<string>com.googleusercontent.apps.1019960150816-q2sbpqi0and1bsva89dcq54plhcccd9u</string>
+			</array>
+		</dict>
+	</array>
 <key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

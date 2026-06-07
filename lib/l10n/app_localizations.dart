@@ -8,7 +8,6 @@ import 'package:intl/intl.dart' as intl;
 import 'app_localizations_ar.dart';
 import 'app_localizations_en.dart';
 import 'app_localizations_fr.dart';
-import 'app_localizations_hi.dart';
 import 'app_localizations_id.dart';
 import 'app_localizations_tr.dart';
 import 'app_localizations_ur.dart';
@@ -102,7 +101,6 @@ abstract class AppLocalizations {
     Locale('ar'),
     Locale('en'),
     Locale('fr'),
-    Locale('hi'),
     Locale('id'),
     Locale('tr'),
     Locale('ur')
@@ -147,7 +145,7 @@ abstract class AppLocalizations {
   /// No description provided for @zohar.
   ///
   /// In en, this message translates to:
-  /// **'Zohar'**
+  /// **'Zuhr'**
   String get zohar;
 
   /// No description provided for @asr.
@@ -171,7 +169,7 @@ abstract class AppLocalizations {
   /// No description provided for @juma.
   ///
   /// In en, this message translates to:
-  /// **'Juma'**
+  /// **'Jumu\'ah'**
   String get juma;
 
   /// No description provided for @eid.
@@ -297,7 +295,7 @@ abstract class AppLocalizations {
   /// No description provided for @maslak.
   ///
   /// In en, this message translates to:
-  /// **'Maslak / Prayer Method'**
+  /// **'School of Thought'**
   String get maslak;
 
   /// No description provided for @existing.
@@ -405,7 +403,7 @@ abstract class AppLocalizations {
   /// No description provided for @initiated.
   ///
   /// In en, this message translates to:
-  /// **'Initiated by Food4U / FOODOMATIC Moradabad.'**
+  /// **'Community prayer timing app.'**
   String get initiated;
 
   /// No description provided for @searchCity.
@@ -537,7 +535,6 @@ class _AppLocalizationsDelegate
         'ar',
         'en',
         'fr',
-        'hi',
         'id',
         'tr',
         'ur'
@@ -556,8 +553,6 @@ AppLocalizations lookupAppLocalizations(Locale locale) {
       return AppLocalizationsEn();
     case 'fr':
       return AppLocalizationsFr();
-    case 'hi':
-      return AppLocalizationsHi();
     case 'id':
       return AppLocalizationsId();
     case 'tr':

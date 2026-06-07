@@ -157,7 +157,7 @@ class AppLocalizationsId extends AppLocalizations {
   String get autoCalculated => 'Dihitung otomatis setiap hari.';
 
   @override
-  String get initiated => 'Diprakarsai oleh Food4U / FOODOMATIC Moradabad.';
+  String get initiated => 'Community prayer timing app.';
 
   @override
   String get searchCity => 'Cari kota atau provinsi...';

@@ -11,8 +11,10 @@ void main() {
     );
 
     final in2km = withDistance.where((m) => m.distanceMeters <= 2000).toList();
-    final in10km = withDistance.where((m) => m.distanceMeters <= 10000).toList();
-    final in25km = withDistance.where((m) => m.distanceMeters <= 25000).toList();
+    final in10km =
+        withDistance.where((m) => m.distanceMeters <= 10000).toList();
+    final in25km =
+        withDistance.where((m) => m.distanceMeters <= 25000).toList();
 
     final results10km = sortMosquesForUser(
       in10km,
@@ -37,7 +39,8 @@ void main() {
       sampleMosques,
       LocationService.moradabadCenter,
     );
-    final visible = withDistance.where((m) => m.distanceMeters <= 10000).toList();
+    final visible =
+        withDistance.where((m) => m.distanceMeters <= 10000).toList();
 
     final results = sortMosquesForUser(
       visible,
@@ -48,7 +51,8 @@ void main() {
     expect(results, isNotEmpty);
     for (var i = 1; i < results.length; i++) {
       expect(
-        results[i - 1].mosque.distanceMeters <= results[i].mosque.distanceMeters,
+        results[i - 1].mosque.distanceMeters <=
+            results[i].mosque.distanceMeters,
         isTrue,
       );
     }

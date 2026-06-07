@@ -27,7 +27,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get fajr => 'Fajr';
 
   @override
-  String get zohar => 'Zohar';
+  String get zohar => 'Zuhr';
 
   @override
   String get asr => 'Asr';
@@ -39,7 +39,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get isha => 'Isha';
 
   @override
-  String get juma => 'Juma';
+  String get juma => 'Jumu\'ah';
 
   @override
   String get eid => 'Eid';
@@ -103,7 +103,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get area => 'Area';
 
   @override
-  String get maslak => 'Maslak / Prayer Method';
+  String get maslak => 'School of Thought';
 
   @override
   String get existing => 'Existing';
@@ -157,7 +157,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get autoCalculated => 'Auto-calculated daily.';
 
   @override
-  String get initiated => 'Initiated by Food4U / FOODOMATIC Moradabad.';
+  String get initiated => 'Community prayer timing app.';
 
   @override
   String get searchCity => 'Search city or state...';

@@ -158,7 +158,7 @@ class AppLocalizationsFr extends AppLocalizations {
   String get autoCalculated => 'Calculé automatiquement chaque jour.';
 
   @override
-  String get initiated => 'Initié par Food4U / FOODOMATIC Moradabad.';
+  String get initiated => 'Community prayer timing app.';
 
   @override
   String get searchCity => 'Rechercher une ville ou un état...';

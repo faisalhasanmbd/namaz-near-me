@@ -157,8 +157,7 @@ class AppLocalizationsTr extends AppLocalizations {
   String get autoCalculated => 'Her gün otomatik hesaplanır.';
 
   @override
-  String get initiated =>
-      'Food4U / FOODOMATIC Moradabad tarafından başlatıldı.';
+  String get initiated => 'Community prayer timing app.';
 
   @override
   String get searchCity => 'Şehir veya eyalet ara...';

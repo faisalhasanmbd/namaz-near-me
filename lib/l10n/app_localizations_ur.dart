@@ -157,7 +157,7 @@ class AppLocalizationsUr extends AppLocalizations {
   String get autoCalculated => 'روزانہ خودکار حساب۔';
 
   @override
-  String get initiated => 'Food4U / FOODOMATIC مراد آباد کی پہل۔';
+  String get initiated => 'Community prayer timing app.';
 
   @override
   String get searchCity => 'شہر یا صوبہ تلاش کریں...';

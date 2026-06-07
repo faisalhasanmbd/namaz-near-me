@@ -1,28 +1,34 @@
 import 'dart:async';
-import 'dart:io';
-import 'dart:ui' as ui;
+import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:flutter/foundation.dart';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'l10n/app_localizations.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'data/cities.dart';
+import 'data/sample_mosques.dart';
+import 'utils/mosque_utils.dart';
 import 'models/daily_islamic_timings.dart';
 import 'models/mosque.dart';
 import 'services/islamic_timing_service.dart';
+import 'services/city_seeder_service.dart';
+import 'services/city_service.dart';
 import 'services/jamaat_sorter.dart';
 import 'services/location_service.dart';
 import 'services/notification_service.dart';
-import 'services/otp_session.dart';
 import 'screens/suggest_edit_screen.dart';
+import 'screens/voice_assistant_screen.dart';
+import 'screens/contributor_signup_screen.dart';
+import 'screens/rewards_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart';
+import 'providers/app_provider.dart';
 
 // ── Eid detection ────────────────────────────────────────────────────────────
 enum EidType { none, eidUlFitr, eidUlAdha }
@@ -35,53 +41,24 @@ class EidWindow {
   bool get isBeforeEid => daysUntilEid > 0;
 }
 
-EidWindow getEidWindowStatus(DateTime date) {
-  final h = _hijriFromDate(date);
-  // Eid ul Fitr = 1 Shawwal (month 10), show from 25 Ramadan
-  if (h[0] == 9 && h[1] >= 25) {
-    return EidWindow(type: EidType.eidUlFitr, daysUntilEid: (30 - h[1]) + 1);
+// hijriAdjustment: admin-confirmed day offset (-2..+2) for the city.
+// Applying it here ensures Eid windows align with the confirmed Hijri date.
+EidWindow getEidWindowStatus(DateTime date, {int hijriAdjustment = 0}) {
+  final adjustedDate = date.add(Duration(days: hijriAdjustment));
+  final h = IslamicTimingService.hijriMonthDay(adjustedDate);
+  // Eid ul Fitr = 1 Shawwal (month 10), show from 27 Ramadan (3 days before)
+  if (h[0] == 9 && h[1] >= 27) {
+    return EidWindow(type: EidType.eidUlFitr, daysUntilEid: 30 - h[1]);
   }
   if (h[0] == 10 && h[1] <= 3) {
     return EidWindow(type: EidType.eidUlFitr, daysUntilEid: 1 - h[1]);
   }
-  // Eid ul Adha = 10 Dhu al-Hijjah (month 12), show from 5th
-  if (h[0] == 12 && h[1] >= 5 && h[1] <= 13) {
+  // Eid ul Adha = 10 Dhu al-Hijjah (month 12), show from 7th (3 days before)
+  if (h[0] == 12 && h[1] >= 7 && h[1] <= 13) {
     return EidWindow(type: EidType.eidUlAdha, daysUntilEid: 10 - h[1]);
   }
   return const EidWindow(type: EidType.none, daysUntilEid: 999);
 }
-
-// Returns [month, day] of Hijri date for given Gregorian date
-List<int> _hijriFromDate(DateTime date) {
-  final jd = _gjd(date.year, date.month, date.day);
-  final y = ((30 * (jd - 1948439.5) + 10646) / 10631).floor();
-  final mo = _ijd(y, 1, 1);
-  final m = ((jd - (29 + mo)) / 29.5).ceil() + 1;
-  final month = m > 12 ? 12 : m;
-  final day = (jd - _ijd(y, month, 1) + 1).floor();
-  return [month, day];
-}
-
-double _gjd(int y, int mo, int d) {
-  final a = ((14 - mo) / 12).floor();
-  final yr = y + 4800 - a;
-  final m = mo + 12 * a - 3;
-  return d +
-      ((153 * m + 2) / 5).floor() +
-      365 * yr +
-      (yr / 4).floor() -
-      (yr / 100).floor() +
-      (yr / 400).floor() -
-      32045;
-}
-
-double _ijd(int y, int mo, int d) =>
-    d +
-    (29.5 * (mo - 1)).ceil() +
-    (y - 1) * 354 +
-    ((3 + 11 * y) / 30).floor() +
-    1948439.5 -
-    1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -91,15 +68,32 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     await Firebase.initializeApp();
+    await FirebaseAppCheck.instance.activate(
+      providerAndroid: kDebugMode
+          ? const AndroidDebugProvider()
+          : const AndroidPlayIntegrityProvider(),
+      providerApple: kDebugMode
+          ? const AppleDebugProvider()
+          : const AppleAppAttestProvider(),
+    );
   } catch (error) {
     debugPrint('Firebase unavailable at startup: $error');
   }
-  final prefs = await SharedPreferences.getInstance();
-  final localeCode = prefs.getString('app_locale_code');
-  appLocaleNotifier.value =
-      localeCode == null || localeCode == 'system' ? null : Locale(localeCode);
-  await NotificationService.instance.initialize();
-  runApp(const NamazNearMeApp());
+  // Sign in anonymously so the OSM seeder and read-only flows have a valid
+  // auth token. Phone OTP verification will replace this session.
+  if (FirebaseAuth.instance.currentUser == null) {
+    try {
+      await FirebaseAuth.instance.signInAnonymously();
+    } catch (_) {}
+  }
+  final appState = AppState();
+  await appState.init();
+  runApp(
+    ChangeNotifierProvider<AppState>.value(
+      value: appState,
+      child: const NamazNearMeApp(),
+    ),
+  );
 }
 
 class NamazNearMeApp extends StatefulWidget {
@@ -131,6 +125,8 @@ class _NamazNearMeAppState extends State<NamazNearMeApp> {
     return MaterialApp(
       title: 'Namaz Near Me',
       debugShowCheckedModeBanner: false,
+      scrollBehavior:
+          const MaterialScrollBehavior().copyWith(overscroll: false),
       locale: appLocaleNotifier.value,
       localizationsDelegates: const [
         AppLocalizations.delegate,
@@ -165,14 +161,14 @@ class NearbyMosquesScreen extends StatefulWidget {
   State<NearbyMosquesScreen> createState() => _NearbyMosquesScreenState();
 }
 
-class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
+class _NearbyMosquesScreenState extends State<NearbyMosquesScreen>
+    with WidgetsBindingObserver {
   String _selectedNamaz = 'all';
   int _radiusKm = 2;
   UserLocation _location = LocationService.moradabadCenter;
   bool _loadingLocation = true;
   CityInfo _selectedCity = indianCities.first;
-  late final Stream<List<Mosque>> _mosquesStream;
-  Set<String> _favouriteKeys = {};
+  late Stream<List<Mosque>> _mosquesStream;
   bool _showFavouritesOnly = false;
   String? _hijriDateOverride;
   int _hijriAdjustment = 0;
@@ -184,108 +180,145 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
   String? _lastEnglishDateKey;
   String? _focusedMosqueKey;
   int _asrShadowFactor = 2;
+  bool _cityManuallySelected = false;
+  bool _locationPermissionDeniedForever = false;
+  bool _isSeedingMosques = false;
 
-  Stream<List<Mosque>> _watchMosques() async* {
+  Stream<List<Mosque>> _watchMosques(CityInfo city) async* {
+    final cityName = city.name;
+    final useSampleFallback = cityName.toLowerCase().trim() == 'moradabad';
     if (Firebase.apps.isEmpty) {
-      yield const [];
+      yield useSampleFallback ? sampleMosques : const <Mosque>[];
       return;
     }
-    try {
-      yield* FirebaseFirestore.instance
-          .collection('mosques')
-          .snapshots()
-          .map((snapshot) {
-        final result = <String, Mosque>{};
-        for (final doc in snapshot.docs) {
-          final data = doc.data();
-          final name = _readString(data['name']);
-          if (name == null) continue;
-          final key = _mosqueKey(name);
-          if (_readBool(data['deleted']) || data['status'] == 'deleted') {
-            result.remove(key);
-            continue;
+    while (true) {
+      try {
+        final snapshots = FirebaseFirestore.instance
+            .collection('mosques')
+            .where('city', isEqualTo: cityName)
+            .snapshots()
+            .map((snapshot) {
+          final result = <String, Mosque>{};
+          for (final doc in snapshot.docs) {
+            final data = doc.data();
+            final name = _readString(data['name']);
+            if (name == null) continue;
+            final key = mosqueKey(name);
+            if (_readBool(data['deleted']) || data['status'] == 'deleted') {
+              result.remove(key);
+              continue;
+            }
+            result[key] = _mosqueFromFirestore(
+              data,
+              result[key],
+              docId: doc.id,
+            );
           }
-          result[key] = _mosqueFromFirestore(data, result[key], docId: doc.id);
+          return result.values.toList();
+        });
+        await for (final liveMosques in snapshots) {
+          if (liveMosques.isEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) setState(() => _isSeedingMosques = true);
+            });
+            CitySeederService.instance.seedIfNeeded(city);
+            yield useSampleFallback ? sampleMosques : const <Mosque>[];
+          } else {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _isSeedingMosques) {
+                setState(() => _isSeedingMosques = false);
+              }
+            });
+            yield liveMosques;
+          }
         }
-        return result.values.toList();
-      });
-    } catch (e) {
-      debugPrint('Firestore error: $e');
-      yield const [];
+        return;
+      } catch (e) {
+        debugPrint('Firestore error, retrying in 5s: $e');
+        yield useSampleFallback ? sampleMosques : const <Mosque>[];
+        await Future.delayed(const Duration(seconds: 5));
+      }
+    }
+  }
+
+  bool _openedExternalSettings = false;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _openedExternalSettings) {
+      _openedExternalSettings = false;
+      _loadLocation();
     }
   }
 
   @override
   void initState() {
     super.initState();
-    _mosquesStream = _watchMosques();
+    WidgetsBinding.instance.addObserver(this);
+    _mosquesStream = _watchMosques(_selectedCity);
+    CityService.instance.load().then((_) {
+      if (!mounted) return;
+      final savedName = context.read<AppState>().selectedCity;
+      final matches = CityService.instance.all
+          .where((c) => c.name.toLowerCase() == savedName.toLowerCase());
+      if (matches.isNotEmpty && matches.first.name != _selectedCity.name) {
+        final city = matches.first;
+        setState(() {
+          _cityManuallySelected = true;
+          _selectedCity = city;
+          _location = UserLocation(
+            latitude: city.latitude,
+            longitude: city.longitude,
+            isCurrentLocation: false,
+          );
+          _mosquesStream = _watchMosques(city);
+        });
+      } else {
+        setState(() {});
+      }
+    });
     _loadLocation();
-    _loadAsrMethodPreference();
-    _loadFavourites();
     _loadHijriDate();
     _loadHijriAdjustmentPermission();
     _startDateTicker();
+    _loadAsrMethod();
+  }
+
+  Future<void> _loadAsrMethod() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getInt('asr_shadow_factor');
+    if (saved != null && mounted) setState(() => _asrShadowFactor = saved);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _dateTicker?.cancel();
     super.dispose();
   }
 
-  Future<void> _loadFavourites() async {
-    final prefs = await SharedPreferences.getInstance();
-    final keys = prefs.getStringList('favourite_mosques') ?? [];
-    if (mounted) setState(() => _favouriteKeys = keys.toSet());
-  }
-
-  Future<void> _loadAsrMethodPreference() async {
-    final prefs = await SharedPreferences.getInstance();
-    final value = prefs.getInt('asr_shadow_factor') ?? 2;
-    if (!mounted) return;
-    setState(() => _asrShadowFactor = value == 1 ? 1 : 2);
-  }
-
   Future<void> _backfillMyContributorScore() async {
+    // Score is managed exclusively by Cloud Functions.
+    // This method only syncs the display name so the leaderboard shows a
+    // real name instead of the "Namaz Volunteer" placeholder.
+    // Skip for anonymous users — top_contributors requires phone verification.
     try {
       final user = FirebaseAuth.instance.currentUser;
-      final phone = user?.phoneNumber;
       final uid = user?.uid;
-      final displayName = _cleanContributorName(user?.displayName);
-      if (uid == null || phone == null) return;
-      final prefs = await SharedPreferences.getInstance();
-      final key = 'contributor_score_backfilled_$uid';
-      if (prefs.getBool(key) == true) return;
-
-      var score = 0;
-      final logs = await FirebaseFirestore.instance
-          .collection('contribution_logs')
-          .where('phone', isEqualTo: phone)
-          .get();
-      score += logs.docs.length;
-
-      final edits = await FirebaseFirestore.instance
-          .collection('mosque_edits')
-          .where('suggested_by_phone', isEqualTo: phone)
-          .get();
-      for (final doc in edits.docs) {
-        final status = doc.data()['status'];
-        if (status == 'approved' || status == 'applied') score++;
-      }
-
-      if (score > 0) {
-        await FirebaseFirestore.instance
-            .collection('top_contributors')
-            .doc(uid)
-            .set({
-          'name': displayName,
-          'score': score,
-          'updated_at': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-      await prefs.setBool(key, true);
+      if (uid == null || user!.isAnonymous) return;
+      final cityName = _selectedCity.name;
+      await FirebaseFirestore.instance
+          .collection('top_contributors')
+          .doc(cityContributorDocId(cityName, uid))
+          .set({
+        'name':
+            _cleanContributorNameOrNull(user?.displayName) ?? 'Namaz Volunteer',
+        'uid': uid,
+        'city': cityName,
+        'updated_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
     } catch (error) {
-      debugPrint('Contributor score backfill skipped: $error');
+      debugPrint('Contributor display sync skipped: $error');
     }
   }
 
@@ -313,25 +346,24 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
       ),
     );
     if (selected == null) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('asr_shadow_factor', selected);
     if (!mounted) return;
     setState(() => _asrShadowFactor = selected);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('asr_shadow_factor', selected);
   }
 
   Future<void> _toggleFavourite(String key) async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      if (_favouriteKeys.contains(key)) {
-        _favouriteKeys.remove(key);
-      } else {
-        _favouriteKeys.add(key);
-      }
-    });
-    await prefs.setStringList('favourite_mosques', _favouriteKeys.toList());
+    await context.read<AppState>().toggleFavourite(key);
+    if (mounted) setState(() {});
   }
 
-  String _mosqueUniqueKey(Mosque m) => m.placeId ?? m.name;
+  // Uses firestoreDocId (city-name-area kebab key) as the stable unique key.
+  // placeId is first choice (OSM), firestoreDocId is second (Firestore-keyed),
+  // fallback combines name+area+city to avoid collisions on duplicate names.
+  String _mosqueUniqueKey(Mosque m) =>
+      m.placeId ??
+      m.firestoreDocId ??
+      mosqueKey('${m.name}_${m.area}_${m.city ?? ''}');
 
   Future<void> _loadHijriDate() async {
     var adjustment = 0;
@@ -339,7 +371,7 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
     try {
       final doc = await FirebaseFirestore.instance
           .collection('islamic_date_city')
-          .doc(_cityDateKey(_selectedCity.name))
+          .doc(cityDateKey(_selectedCity.name))
           .get();
       final data = doc.data();
       adjustment = (data?['adjustment'] as num?)?.toInt() ?? 0;
@@ -361,27 +393,31 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
       _hijriAdjustment = adjustment;
       _hijriMonthConfirmed =
           confirmedMonth != null && confirmedMonth == _hijriMonthKey(hijriDate);
-      _lastHijriLookupKey = _dateKey(lookupDate);
-      _lastEnglishDateKey = _dateKey(DateTime.now());
+      _lastHijriLookupKey = dateKey(lookupDate);
+      _lastEnglishDateKey = dateKey(DateTime.now());
     });
   }
 
   void _startDateTicker() {
-    _lastEnglishDateKey = _dateKey(DateTime.now());
-    _lastHijriLookupKey = _dateKey(IslamicTimingService(
-      latitude: _selectedCity.latitude,
-      longitude: _selectedCity.longitude,
-      asrShadowFactor: _asrShadowFactor,
-    ).hijriDateFor(DateTime.now()));
-    _dateTicker = Timer.periodic(const Duration(minutes: 1), (_) {
-      if (!mounted) return;
-      final now = DateTime.now();
-      final englishKey = _dateKey(now);
-      final hijriLookupKey = _dateKey(IslamicTimingService(
+    _lastEnglishDateKey = dateKey(DateTime.now());
+    _lastHijriLookupKey = dateKey(
+      IslamicTimingService(
         latitude: _selectedCity.latitude,
         longitude: _selectedCity.longitude,
         asrShadowFactor: _asrShadowFactor,
-      ).hijriDateFor(now));
+      ).hijriDateFor(DateTime.now()),
+    );
+    _dateTicker = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (!mounted) return;
+      final now = DateTime.now();
+      final englishKey = dateKey(now);
+      final hijriLookupKey = dateKey(
+        IslamicTimingService(
+          latitude: _selectedCity.latitude,
+          longitude: _selectedCity.longitude,
+          asrShadowFactor: _asrShadowFactor,
+        ).hijriDateFor(now),
+      );
       if (englishKey != _lastEnglishDateKey ||
           hijriLookupKey != _lastHijriLookupKey) {
         _lastEnglishDateKey = englishKey;
@@ -393,14 +429,117 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
   }
 
   Future<void> _loadLocation() async {
-    final location = await LocationService().currentOrFallback();
+    final appState = context.read<AppState>();
+    final permission = await Geolocator.checkPermission();
+
+    // Permission was permanently denied — cannot re-prompt.
+    // Fall back to selected city center and show settings link.
+    if (permission == LocationPermission.deniedForever && mounted) {
+      setState(() {
+        _loadingLocation = false;
+        _locationPermissionDeniedForever = true;
+        // Use the currently selected city's center, not a hardcoded coordinate
+        _location = UserLocation(
+          latitude: _selectedCity.latitude,
+          longitude: _selectedCity.longitude,
+          isCurrentLocation: false,
+        );
+      });
+      return;
+    }
+
+    if (permission == LocationPermission.denied && mounted) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Allow location access'),
+          content: const Text(
+            'Namaz Near Me uses your location to show nearby mosques. '
+            'Your location is never stored or shared.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Use city center'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Allow'),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true) {
+        if (mounted) {
+          setState(() {
+            _loadingLocation = false;
+            // Still use selected city center, not hardcoded Moradabad
+            _location = UserLocation(
+              latitude: _selectedCity.latitude,
+              longitude: _selectedCity.longitude,
+              isCurrentLocation: false,
+            );
+          });
+        }
+        return;
+      }
+    }
+
+    // If GPS (location service) is off, prompt user to enable it
+    final gpsEnabled = await LocationService().isLocationServiceEnabled();
+    if (!gpsEnabled && mounted) {
+      final openSettings = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Location (GPS) is off'),
+          content: const Text(
+            'Please turn on your device location (GPS) so we can show mosques near you.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Skip'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Open Settings'),
+            ),
+          ],
+        ),
+      );
+      if (openSettings == true) {
+        _openedExternalSettings = true;
+        await LocationService().openLocationSettings();
+        return; // location will refresh via didChangeAppLifecycleState on resume
+      }
+    }
+
+    final rawLocation = await LocationService().currentOrFallback();
+    // If GPS was not available, use the selected city's center rather than
+    // the hardcoded Moradabad fallback in LocationService.
+    final location = rawLocation.isCurrentLocation
+        ? rawLocation
+        : UserLocation(
+            latitude: _selectedCity.latitude,
+            longitude: _selectedCity.longitude,
+            isCurrentLocation: false,
+          );
+
     final nearestCity = _nearestCityForLocation(location);
     if (!mounted) return;
+    if (_cityManuallySelected) {
+      setState(() => _loadingLocation = false);
+      return;
+    }
     setState(() {
       _location = location;
       _selectedCity = nearestCity;
       _loadingLocation = false;
+      _locationPermissionDeniedForever = false;
+      _mosquesStream = _watchMosques(nearestCity);
     });
+    appState.setCity(nearestCity.name);
     _lastHijriLookupKey = null;
     _loadHijriDate();
   }
@@ -443,6 +582,7 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
   }
 
   Future<void> _openCitySelector(BuildContext context) async {
+    final appState = context.read<AppState>();
     final selected = await showModalBottomSheet<CityInfo>(
       context: context,
       isScrollControlled: true,
@@ -450,6 +590,7 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
     );
     if (selected != null && mounted) {
       setState(() {
+        _cityManuallySelected = true;
         _selectedCity = selected;
         _location = UserLocation(
           latitude: selected.latitude,
@@ -457,50 +598,23 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
           isCurrentLocation: false,
         );
         _loadingLocation = false;
+        _mosquesStream = _watchMosques(selected);
       });
+      appState.setCity(selected.name);
       _lastHijriLookupKey = null;
       _loadHijriDate();
     }
   }
 
-  Future<void> _openLanguageSelector(BuildContext context) async {
-    final selected = await showModalBottomSheet<String>(
-      context: context,
-      builder: (context) => const SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _LanguageOptionTile(value: 'system', label: 'System default'),
-            _LanguageOptionTile(value: 'en', label: 'English'),
-            _LanguageOptionTile(value: 'ur', label: 'Urdu'),
-            _LanguageOptionTile(value: 'ar', label: 'Arabic'),
-            _LanguageOptionTile(value: 'fr', label: 'French'),
-            _LanguageOptionTile(value: 'id', label: 'Indonesian'),
-            _LanguageOptionTile(value: 'tr', label: 'Turkish'),
-          ],
-        ),
-      ),
-    );
-    if (selected == null) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('app_locale_code', selected);
-    appLocaleNotifier.value = selected == 'system' ? null : Locale(selected);
-  }
-
   Future<void> _confirmHijriAdjustment(int adjustment) async {
-    if (!_canAdjustHijri) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Only admins can adjust city Hijri date.')));
-      }
-      return;
-    }
-    final phone = await OtpSession.loadVerifiedPhone();
+    final phone = context.read<AppState>().verifiedPhone;
     if (phone == null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content:
-                Text('Please verify your number first via Suggest Edit.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please verify your number first via Suggest Edit.'),
+          ),
+        );
       }
       return;
     }
@@ -518,7 +632,7 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
     if (monthKey == null) return;
     await FirebaseFirestore.instance
         .collection('islamic_date_city')
-        .doc(_cityDateKey(_selectedCity.name))
+        .doc(cityDateKey(_selectedCity.name))
         .set({
       'city': _selectedCity.name,
       'adjustment': adjustment,
@@ -536,19 +650,25 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
   }
 
   Future<void> _loadHijriAdjustmentPermission() async {
-    if (Firebase.apps.isEmpty) return;
+    User? user;
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) {
-        if (mounted) setState(() => _canAdjustHijri = false);
-        return;
-      }
-      final doc = await FirebaseFirestore.instance
+      user = FirebaseAuth.instance.currentUser;
+    } catch (_) {
+      return; // Firebase not initialized (e.g., in tests)
+    }
+    if (user == null) {
+      if (mounted) setState(() => _canAdjustHijri = false);
+      return;
+    }
+    try {
+      final snap = await FirebaseFirestore.instance
           .collection('admin_users')
           .doc(user.uid)
           .get();
-      final isAdmin = (doc.data()?['is_admin'] == true);
-      if (mounted) setState(() => _canAdjustHijri = isAdmin);
+      if (mounted) {
+        setState(() =>
+            _canAdjustHijri = snap.exists && snap.data()?['is_admin'] == true);
+      }
     } catch (_) {
       if (mounted) setState(() => _canAdjustHijri = false);
     }
@@ -578,17 +698,33 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
       longitude: _selectedCity.longitude,
       asrShadowFactor: _asrShadowFactor,
     );
-    final dailyTimings =
-        islamicTimingService.today(hijriDateOverride: _hijriDateOverride);
+    final dailyTimings = islamicTimingService.today(
+      hijriDateOverride: _hijriDateOverride,
+    );
     final autoMaghribJamaat = islamicTimingService.maghribJamaatTime();
 
     return Scaffold(
       appBar: AppBar(
-        title: Image.asset(
-          'assets/images/namaz-near-me-icon.png',
-          width: 42,
-          height: 42,
-          fit: BoxFit.contain,
+        leadingWidth: 40,
+        titleSpacing: 4,
+        leading: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 2, 8),
+          child: Image.asset(
+            'assets/images/namaz-near-me-icon.png',
+            fit: BoxFit.contain,
+          ),
+        ),
+        title: const FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'Namaz Near Me',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.2,
+            ),
+          ),
         ),
         centerTitle: false,
         actions: [
@@ -598,14 +734,18 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
             onPressed: () => _openSearch(context),
           ),
           IconButton(
-            tooltip: 'Change language',
-            onPressed: () => _openLanguageSelector(context),
-            icon: const Icon(Icons.language),
-          ),
-          IconButton(
-            tooltip: 'Asr method',
-            onPressed: () => _openAsrMethodSelector(context),
-            icon: const Icon(Icons.schedule),
+            icon: const Icon(Icons.mic_rounded),
+            tooltip: 'Voice Assistant',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => VoiceAssistantScreen(
+                  mosques: _lastVisibleMosques,
+                  userLocation: _location,
+                  cityName: _selectedCity.name,
+                  radiusKm: _radiusKm.toDouble(),
+                ),
+              ),
+            ),
           ),
           if (useCompactActions)
             IconButton(
@@ -619,28 +759,10 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
               icon: const Icon(Icons.location_city),
               label: Text(_selectedCity.name, overflow: TextOverflow.ellipsis),
             ),
-          if (useCompactActions)
-            IconButton(
-              tooltip: 'Update Prayer Times',
-              onPressed: () => _openContributorScreen(context),
-              icon: const Icon(Icons.edit_calendar),
-            )
-          else
-            TextButton.icon(
-              onPressed: () => _openContributorScreen(context),
-              icon: const Icon(Icons.edit_calendar),
-              label: const Text('Update'),
-            ),
           IconButton(
-            tooltip: _showFavouritesOnly
-                ? 'Show all mosques'
-                : 'Show favourites only',
-            onPressed: () => setState(() {
-              _showFavouritesOnly = !_showFavouritesOnly;
-              _focusedMosqueKey = null;
-            }),
-            icon: Icon(_showFavouritesOnly ? Icons.star : Icons.star_border,
-                color: _showFavouritesOnly ? Colors.amber : null),
+            tooltip: 'Asr Method',
+            icon: const Icon(Icons.schedule),
+            onPressed: () => _openAsrMethodSelector(context),
           ),
         ],
       ),
@@ -654,22 +776,30 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
           stream: _mosquesStream,
           initialData: const [],
           builder: (context, snapshot) {
-            final mosques = snapshot.data ?? [];
+            final appState = context.watch<AppState>();
+            final selectedCityName = _selectedCity.name;
+            final mosques = (snapshot.data ?? [])
+                .where((mosque) => sameCity(mosque.city, selectedCityName))
+                .toList();
             final mosquesWithAutoMaghrib = mosques
-                .map((mosque) =>
-                    _withAutoCalendarMaghrib(mosque, autoMaghribJamaat))
+                .map(
+                  (mosque) =>
+                      _withAutoCalendarMaghrib(mosque, autoMaghribJamaat),
+                )
                 .toList();
             final mosquesWithDistance = LocationService().applyDistances(
               mosquesWithAutoMaghrib,
               _location,
             );
             final visibleMosques = mosquesWithDistance
-                .where((m) =>
-                    m.distanceMeters <= _radiusKm * 1000 || !m.hasCoordinates)
+                .where(
+                  (m) =>
+                      m.distanceMeters <= _radiusKm * 1000 || !m.hasCoordinates,
+                )
                 .toList();
             final filteredMosques = _showFavouritesOnly
                 ? visibleMosques
-                    .where((m) => _favouriteKeys.contains(_mosqueUniqueKey(m)))
+                    .where((m) => appState.isFavourite(_mosqueUniqueKey(m)))
                     .toList()
                 : visibleMosques;
             final sortedResults = sortMosquesForUser(
@@ -682,98 +812,180 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
             final focusedResults = _focusedMosqueKey == null
                 ? sortedResults
                 : sortedResults
-                    .where((result) =>
-                        _focusKeyForMosque(result.mosque) == _focusedMosqueKey)
+                    .where(
+                      (result) =>
+                          _focusKeyForMosque(result.mosque) ==
+                          _focusedMosqueKey,
+                    )
                     .toList();
+            final duplicateGroups = _findDuplicateGroups(
+              focusedResults.map((r) => r.mosque).toList(),
+            );
 
-            return ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 104),
-              children: [
-                _DailyIslamicTimingPanel(
-                  timings: dailyTimings,
-                  cityName: _selectedCity.name,
-                  adjustment: _hijriAdjustment,
-                  monthConfirmed: _hijriMonthConfirmed,
-                  verifiedBy: _hijriVerifiedBy,
-                  canAdjustHijri: _canAdjustHijri,
-                  onConfirmAdjustment: _confirmHijriAdjustment,
-                ),
-                const SizedBox(height: 16),
-                _LocationPanel(
-                  radiusKm: _radiusKm,
-                  loadingLocation: _loadingLocation,
-                  isCurrentLocation: _location.isCurrentLocation,
-                  onRefreshLocation: _loadLocation,
-                  onRadiusChanged: (value) => setState(() => _radiusKm = value),
-                  cityName: _selectedCity.name,
-                ),
-                const SizedBox(height: 16),
-                _NamazFilter(
-                  selectedNamaz: _selectedNamaz,
-                  onSelected: (value) => setState(() => _selectedNamaz = value),
-                ),
-                const SizedBox(height: 16),
-                _RewardsPreviewCard(
-                  onOpen: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => RewardsScreen(
-                        onBackfill: _backfillMyContributorScore,
+            return RefreshIndicator(
+              onRefresh: () async {
+                setState(() {
+                  _mosquesStream = _watchMosques(_selectedCity);
+                });
+                await Future.delayed(const Duration(milliseconds: 800));
+              },
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 104),
+                children: [
+                  _DailyIslamicTimingPanel(
+                    timings: dailyTimings,
+                    cityName: _selectedCity.name,
+                    adjustment: _hijriAdjustment,
+                    monthConfirmed: _hijriMonthConfirmed,
+                    verifiedBy: _hijriVerifiedBy,
+                    canAdjustHijri: _canAdjustHijri,
+                    onConfirmAdjustment: _confirmHijriAdjustment,
+                  ),
+                  const SizedBox(height: 16),
+                  _LocationPanel(
+                    radiusKm: _radiusKm,
+                    loadingLocation: _loadingLocation,
+                    isCurrentLocation: _location.isCurrentLocation,
+                    permissionDeniedForever: _locationPermissionDeniedForever,
+                    onRefreshLocation: _loadLocation,
+                    onRadiusChanged: (value) =>
+                        setState(() => _radiusKm = value),
+                    cityName: _selectedCity.name,
+                  ),
+                  const SizedBox(height: 16),
+                  _NamazFilter(
+                    selectedNamaz: _selectedNamaz,
+                    onSelected: (value) =>
+                        setState(() => _selectedNamaz = value),
+                  ),
+                  const SizedBox(height: 16),
+                  _RewardsPreviewCard(
+                    onOpen: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => RewardsScreen(
+                          cityName: _selectedCity.name,
+                          onBackfill: _backfillMyContributorScore,
+                        ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                if (snapshot.hasError)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 12),
-                    child: Text(
-                      'Live updates unavailable.',
-                      style: TextStyle(color: Colors.black54, fontSize: 12),
+                  const SizedBox(height: 16),
+                  if (snapshot.hasError)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.wifi_off_rounded,
+                              color: Colors.orange.shade700,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                'Live updates paused — check internet connection.',
+                                style: TextStyle(fontSize: 13),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-                if (_focusedMosqueKey != null) ...[
-                  _FocusedMosqueBanner(
-                    mosqueName: focusedResults.isNotEmpty
-                        ? focusedResults.first.mosque.name
-                        : 'Selected mosque',
-                    onViewAll: () => setState(() => _focusedMosqueKey = null),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                if (focusedResults.isEmpty)
-                  const _EmptyState()
-                else
-                  for (final result in focusedResults) ...[
-                    _MosqueCard(
-                      result: result,
-                      cityName: _selectedCity.name,
-                      isFavourite: _favouriteKeys
-                          .contains(_mosqueUniqueKey(result.mosque)),
-                      onToggleFavourite: () =>
-                          _toggleFavourite(_mosqueUniqueKey(result.mosque)),
+                  if (_focusedMosqueKey != null) ...[
+                    _FocusedMosqueBanner(
+                      mosqueName: focusedResults.isNotEmpty
+                          ? focusedResults.first.mosque.name
+                          : 'Selected mosque',
+                      onViewAll: () => setState(() => _focusedMosqueKey = null),
                     ),
                     const SizedBox(height: 12),
                   ],
-              ],
+                  if (focusedResults.isEmpty)
+                    _isSeedingMosques && !_showFavouritesOnly
+                        ? _SeedingState(cityName: _selectedCity.name)
+                        : _EmptyState(
+                            message: _showFavouritesOnly
+                                ? 'No favourite mosques saved.\nTap ★ on a mosque to add it.'
+                                : 'No mosques found within ${_radiusKm}km of ${_selectedCity.name}.',
+                            onViewAll: _showFavouritesOnly
+                                ? () => setState(() {
+                                      _showFavouritesOnly = false;
+                                      _focusedMosqueKey = null;
+                                    })
+                                : null,
+                            onWidenRadius:
+                                !_showFavouritesOnly && _radiusKm < 20
+                                    ? () => setState(
+                                          () => _radiusKm =
+                                              (_radiusKm + 2).clamp(2, 20),
+                                        )
+                                    : null,
+                            onAddMosque: !_showFavouritesOnly
+                                ? () => _openContributorScreen(context)
+                                : null,
+                          )
+                  else ...[
+                    // Pinned mosque always first
+                    for (final result in [
+                      ...focusedResults.where(
+                          (r) => appState.isPinned(_mosqueUniqueKey(r.mosque))),
+                      ...focusedResults.where((r) =>
+                          !appState.isPinned(_mosqueUniqueKey(r.mosque))),
+                    ]) ...[
+                      _MosqueCard(
+                        result: result,
+                        cityName: _selectedCity.name,
+                        isFavourite: appState
+                            .isFavourite(_mosqueUniqueKey(result.mosque)),
+                        onToggleFavourite: () =>
+                            _toggleFavourite(_mosqueUniqueKey(result.mosque)),
+                        isPinned:
+                            appState.isPinned(_mosqueUniqueKey(result.mosque)),
+                        onTogglePin: () {
+                          final key = _mosqueUniqueKey(result.mosque);
+                          appState.setPinnedMosque(
+                              appState.isPinned(key) ? null : key);
+                        },
+                        hijriAdjustment: _hijriAdjustment,
+                        duplicates: result.mosque.firestoreDocId != null
+                            ? (duplicateGroups[result.mosque.firestoreDocId] ??
+                                [])
+                            : [],
+                        onContribute: () => _openContributorScreen(context),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (_showFavouritesOnly)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Center(
+                          child: TextButton.icon(
+                            onPressed: () => setState(() {
+                              _showFavouritesOnly = false;
+                              _focusedMosqueKey = null;
+                            }),
+                            icon: const Icon(Icons.mosque_outlined),
+                            label: const Text('View all mosques'),
+                          ),
+                        ),
+                      ),
+                  ],
+                ],
+              ),
             );
           },
         ),
       ),
-    );
-  }
-}
-
-class _LanguageOptionTile extends StatelessWidget {
-  const _LanguageOptionTile({required this.value, required this.label});
-  final String value;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: const Icon(Icons.translate),
-      title: Text(label),
-      onTap: () => Navigator.of(context).pop(value),
     );
   }
 }
@@ -807,10 +1019,7 @@ class _FocusedMosqueBanner extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w800),
             ),
           ),
-          TextButton(
-            onPressed: onViewAll,
-            child: const Text('View all'),
-          ),
+          TextButton(onPressed: onViewAll, child: const Text('View all')),
         ],
       ),
     );
@@ -844,7 +1053,8 @@ class _DailyIslamicTimingPanelState extends State<_DailyIslamicTimingPanel> {
   final ScrollController _scrollCtrl = ScrollController();
   bool _submitting = false;
   int _page = 0;
-  static const int _pillsPerPage = 4;
+  static const int _pillsPerPage = 3;
+  static const double _pillWidth = 88;
 
   @override
   void dispose() {
@@ -858,9 +1068,8 @@ class _DailyIslamicTimingPanelState extends State<_DailyIslamicTimingPanel> {
     final newPage = (_page + dir).clamp(0, _totalPages - 1);
     if (newPage == _page) return;
     setState(() => _page = newPage);
-    const pillWidth = 64.0 + 6.0; // width + gap
     _scrollCtrl.animateTo(
-      newPage * _pillsPerPage * pillWidth,
+      newPage * _pillsPerPage * _pillWidth,
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeOut,
     );
@@ -873,7 +1082,8 @@ class _DailyIslamicTimingPanelState extends State<_DailyIslamicTimingPanel> {
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Could not update. Check internet.')));
+          const SnackBar(content: Text('Could not update. Check internet.')),
+        );
       }
     } finally {
       if (mounted) setState(() => _submitting = false);
@@ -931,8 +1141,10 @@ class _DailyIslamicTimingPanelState extends State<_DailyIslamicTimingPanel> {
                 const SizedBox(width: 8),
                 // Verified badge
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(4),
@@ -950,28 +1162,43 @@ class _DailyIslamicTimingPanelState extends State<_DailyIslamicTimingPanel> {
           if (canCorrect)
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
-              child: Row(children: [
-                const Text('Moon date:',
-                    style: TextStyle(color: Colors.white70, fontSize: 11)),
-                const Spacer(),
-                _submitting
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : Row(children: [
-                        _adjBtn('-1 day',
-                            () => _submitOffset(widget.adjustment - 1)),
-                        const SizedBox(width: 4),
-                        _adjBtn(
-                            'Correct', () => _submitOffset(widget.adjustment),
-                            highlight: true),
-                        const SizedBox(width: 4),
-                        _adjBtn('+1 day',
-                            () => _submitOffset(widget.adjustment + 1)),
-                      ]),
-              ]),
+              child: Row(
+                children: [
+                  const Text(
+                    'Moon date:',
+                    style: TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+                  const Spacer(),
+                  _submitting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Row(
+                          children: [
+                            _adjBtn(
+                              '-1 day',
+                              () => _submitOffset(widget.adjustment - 1),
+                            ),
+                            const SizedBox(width: 4),
+                            _adjBtn(
+                              'Correct',
+                              () => _submitOffset(widget.adjustment),
+                              highlight: true,
+                            ),
+                            const SizedBox(width: 4),
+                            _adjBtn(
+                              '+1 day',
+                              () => _submitOffset(widget.adjustment + 1),
+                            ),
+                          ],
+                        ),
+                ],
+              ),
             ),
 
           const SizedBox(height: 10),
@@ -1003,12 +1230,14 @@ class _DailyIslamicTimingPanelState extends State<_DailyIslamicTimingPanel> {
                               .replaceAll(' – ', '-')
                           : entry.time;
                       return SizedBox(
-                        width: 72,
+                        width: _pillWidth,
                         height: 72,
                         child: Container(
                           margin: const EdgeInsets.only(right: 6),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 4, vertical: 5),
+                            horizontal: 5,
+                            vertical: 5,
+                          ),
                           decoration: BoxDecoration(
                             color: Colors.white.withValues(alpha: 0.13),
                             borderRadius: BorderRadius.circular(8),
@@ -1019,18 +1248,20 @@ class _DailyIslamicTimingPanelState extends State<_DailyIslamicTimingPanel> {
                               Text(
                                 entry.label.toUpperCase(),
                                 style: const TextStyle(
-                                    color: Colors.white70, fontSize: 8),
+                                  color: Colors.white70,
+                                  fontSize: 8.5,
+                                ),
                                 textAlign: TextAlign.center,
-                                maxLines: 1,
+                                maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                               ),
-                              const SizedBox(height: 3),
+                              const SizedBox(height: 4),
                               Text(
                                 displayLine1,
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.w800,
-                                  fontSize: isRange ? 9 : 11,
+                                  fontSize: isRange ? 10 : 11,
                                 ),
                                 textAlign: TextAlign.center,
                                 maxLines: 2,
@@ -1116,19 +1347,25 @@ class _ArrowBtn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: enabled ? onTap : null,
-      child: Container(
-        width: 24,
-        height: 24,
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: enabled ? 0.2 : 0.08),
-          shape: BoxShape.circle,
-        ),
-        child: Icon(
-          icon,
-          color: Colors.white.withValues(alpha: enabled ? 0.9 : 0.3),
-          size: 18,
+      child: SizedBox(
+        width: 44,
+        height: 44,
+        child: Center(
+          child: Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: enabled ? 0.2 : 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              color: Colors.white.withValues(alpha: enabled ? 0.9 : 0.3),
+              size: 18,
+            ),
+          ),
         ),
       ),
     );
@@ -1144,7 +1381,7 @@ class _CitySearchSheet extends StatefulWidget {
 
 class _CitySearchSheetState extends State<_CitySearchSheet> {
   final _search = TextEditingController();
-  List<CityInfo> _filtered = indianCities;
+  List<CityInfo> _filtered = CityService.instance.all;
 
   @override
   void dispose() {
@@ -1155,12 +1392,26 @@ class _CitySearchSheetState extends State<_CitySearchSheet> {
   void _onSearch(String q) {
     final ql = q.toLowerCase();
     setState(() {
-      _filtered = indianCities
-          .where((c) =>
-              c.name.toLowerCase().contains(ql) ||
-              c.state.toLowerCase().contains(ql))
+      _filtered = CityService.instance.all
+          .where(
+            (c) =>
+                c.name.toLowerCase().contains(ql) ||
+                c.state.toLowerCase().contains(ql) ||
+                c.country.toLowerCase().contains(ql),
+          )
           .toList();
     });
+  }
+
+  Future<void> _openAddCity() async {
+    final result = await showModalBottomSheet<CityInfo>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => const _AddCitySheet(),
+    );
+    if (result != null && mounted) {
+      Navigator.of(context).pop(result);
+    }
   }
 
   @override
@@ -1170,81 +1421,238 @@ class _CitySearchSheetState extends State<_CitySearchSheet> {
       maxChildSize: 0.95,
       minChildSize: 0.5,
       expand: false,
-      builder: (context, sc) => Column(children: [
-        const SizedBox(height: 12),
-        Container(
+      builder: (context, sc) => Column(
+        children: [
+          const SizedBox(height: 12),
+          Container(
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-                color: Colors.black26, borderRadius: BorderRadius.circular(2))),
-        const SizedBox(height: 12),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: TextField(
-            controller: _search,
-            autofocus: true,
-            decoration: InputDecoration(
-              hintText: 'Search city or state...',
-              prefixIcon: const Icon(Icons.search),
-              border:
-                  OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              contentPadding: const EdgeInsets.symmetric(vertical: 0),
+              color: Colors.black26,
+              borderRadius: BorderRadius.circular(2),
             ),
-            onChanged: _onSearch,
           ),
-        ),
-        const SizedBox(height: 8),
-        Expanded(
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              controller: _search,
+              autofocus: true,
+              decoration: InputDecoration(
+                hintText: 'Search city, state or country...',
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 0),
+              ),
+              onChanged: _onSearch,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
             child: ListView.builder(
-          controller: sc,
-          itemCount: _filtered.length,
-          itemBuilder: (context, i) {
-            final city = _filtered[i];
-            final isSel = city.name == widget.selectedCity.name;
-            return ListTile(
-              leading: Icon(isSel ? Icons.location_on : Icons.location_city,
-                  color: isSel ? const Color(0xFF0F7C68) : Colors.black45),
-              title: Text(city.name,
-                  style: TextStyle(
+              controller: sc,
+              itemCount: _filtered.length + 1,
+              itemBuilder: (context, i) {
+                if (i == _filtered.length) {
+                  return ListTile(
+                    leading: const Icon(
+                      Icons.add_location_alt_outlined,
+                      color: Color(0xFF0F7C68),
+                    ),
+                    title: const Text(
+                      'Add my city',
+                      style: TextStyle(color: Color(0xFF0F7C68)),
+                    ),
+                    subtitle: const Text(
+                      'City not in list? Add it for everyone',
+                    ),
+                    onTap: _openAddCity,
+                  );
+                }
+                final city = _filtered[i];
+                final isSel = city.name == widget.selectedCity.name;
+                return ListTile(
+                  leading: Icon(
+                    isSel ? Icons.location_on : Icons.location_city,
+                    color: isSel ? const Color(0xFF0F7C68) : Colors.black45,
+                  ),
+                  title: Text(
+                    city.name,
+                    style: TextStyle(
                       fontWeight: isSel ? FontWeight.w800 : FontWeight.normal,
-                      color: isSel ? const Color(0xFF0F7C68) : null)),
-              subtitle: Text(city.state),
-              trailing: isSel
-                  ? const Icon(Icons.check, color: Color(0xFF0F7C68))
-                  : null,
-              onTap: () => Navigator.of(context).pop(city),
-            );
-          },
-        )),
-      ]),
+                      color: isSel ? const Color(0xFF0F7C68) : null,
+                    ),
+                  ),
+                  subtitle: Text(
+                    city.displayName
+                        .replaceFirst(city.name, '')
+                        .replaceFirst(', ', ''),
+                  ),
+                  trailing: isSel
+                      ? const Icon(Icons.check, color: Color(0xFF0F7C68))
+                      : null,
+                  onTap: () => Navigator.of(context).pop(city),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-String _mosqueKey(String name) {
-  return name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
+class _AddCitySheet extends StatefulWidget {
+  const _AddCitySheet();
+  @override
+  State<_AddCitySheet> createState() => _AddCitySheetState();
 }
 
-String _mosqueDocId(String mosqueName, String cityName) {
-  String clean(String value) {
-    return value
-        .toLowerCase()
-        .trim()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
-        .replaceAll(RegExp(r'^-+|-+$'), '');
+class _AddCitySheetState extends State<_AddCitySheet> {
+  final _nameCtrl = TextEditingController();
+  final _stateCtrl = TextEditingController();
+  final _countryCtrl = TextEditingController(text: 'India');
+  bool _submitting = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _stateCtrl.dispose();
+    _countryCtrl.dispose();
+    super.dispose();
   }
 
-  final base = '${clean(cityName)}-${clean(mosqueName)}'
-      .replaceAll(RegExp(r'^-+|-+$'), '');
-  return base.isEmpty ? 'mosque-unknown' : base;
-}
+  Future<void> _submit() async {
+    final name = _nameCtrl.text.trim();
+    final state = _stateCtrl.text.trim();
+    final country = _countryCtrl.text.trim();
+    if (name.isEmpty || country.isEmpty) {
+      setState(() => _error = 'City name and country are required.');
+      return;
+    }
+    final phone = context.read<AppState>().verifiedPhone;
+    if (phone == null) {
+      setState(
+        () => _error =
+            'Please verify your phone first via Suggest Edit on any mosque.',
+      );
+      return;
+    }
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      final location = await LocationService().currentOrFallback();
+      await CityService.instance.addCity(
+        name: name,
+        state: state,
+        country: country,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        verifiedPhone: phone,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(
+        CityInfo(
+          name: name,
+          state: state,
+          country: country,
+          latitude: location.latitude,
+          longitude: location.longitude,
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Could not save. Check internet.';
+          _submitting = false;
+        });
+      }
+    }
+  }
 
-String _cityDateKey(String cityName) {
-  return cityName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-');
-}
-
-String _dateKey(DateTime date) {
-  return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        16,
+        24,
+        16,
+        MediaQuery.of(context).viewInsets.bottom + 24,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Add a new city',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Your current GPS location will be used as the city center.',
+            style: TextStyle(fontSize: 12, color: Colors.black54),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _nameCtrl,
+            decoration: const InputDecoration(
+              labelText: 'City name *',
+              border: OutlineInputBorder(),
+            ),
+            textCapitalization: TextCapitalization.words,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _stateCtrl,
+            decoration: const InputDecoration(
+              labelText: 'State / Province',
+              border: OutlineInputBorder(),
+            ),
+            textCapitalization: TextCapitalization.words,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _countryCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Country *',
+              border: OutlineInputBorder(),
+            ),
+            textCapitalization: TextCapitalization.words,
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              style: const TextStyle(color: Colors.red, fontSize: 13),
+            ),
+          ],
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _submitting ? null : _submit,
+            icon: _submitting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.add_location_alt),
+            label: Text(_submitting ? 'Saving...' : 'Add City'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(48),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 int? _hijriDay(String? hijriDate) {
@@ -1267,10 +1675,11 @@ Mosque _mosqueFromFirestore(
   String? docId,
 }) {
   final timings = _mergeTimings(data['timings'], existing?.timings, data);
+  final prayerEditMeta = _readPrayerEditMeta(data['timing_edit_meta']);
   final updatedAt = _readDate(data['timing_updated_at']) ??
       _readDate(data['updated_at']) ??
       existing?.timingUpdatedAt ??
-      DateTime.now();
+      DateTime(2000);
 
   if (existing != null) {
     return existing.copyWith(
@@ -1289,8 +1698,19 @@ Mosque _mosqueFromFirestore(
       timingVerifiedByPhone: _readString(data['timing_verified_by_phone']) ??
           existing.timingVerifiedByPhone,
       timingUpdatedAt: updatedAt,
+      addedByName: _readString(data['added_by_name']) ??
+          _readString(data['added_by_name_private']) ??
+          existing.addedByName,
+      addedByPhone:
+          _readString(data['added_by_phone']) ?? existing.addedByPhone,
+      addedAt: _readDate(data['added_at']) ??
+          _readDate(data['created_at']) ??
+          existing.addedAt,
+      prayerEditMeta:
+          prayerEditMeta.isNotEmpty ? prayerEditMeta : existing.prayerEditMeta,
       placeId: _readString(data["place_id"]) ?? existing.placeId,
       firestoreDocId: docId ?? existing.firestoreDocId,
+      needsReview: _readBool(data['needs_review']) || existing.needsReview,
     );
   }
 
@@ -1313,6 +1733,7 @@ Mosque _mosqueFromFirestore(
     address: _readString(data['address']) ?? 'Address pending',
     latitude: dataLat ?? cityMatch?.latitude,
     longitude: dataLng ?? cityMatch?.longitude,
+    hasOwnCoordinates: dataLat != null && dataLng != null,
     distanceMeters: 999999,
     timings: timings,
     isVerified: data['timing_verification_status'] == 'admin_verified' ||
@@ -1322,9 +1743,38 @@ Mosque _mosqueFromFirestore(
     timingVerifiedByName: _readString(data['timing_verified_by_name']),
     timingVerifiedByPhone: _readString(data['timing_verified_by_phone']),
     timingUpdatedAt: updatedAt,
+    addedByName: _readString(data['added_by_name']) ??
+        _readString(data['added_by_name_private']),
+    addedByPhone: _readString(data['added_by_phone']),
+    addedAt: _readDate(data['added_at']) ?? _readDate(data['created_at']),
+    prayerEditMeta: prayerEditMeta,
     placeId: _readString(data['place_id']),
     firestoreDocId: docId,
+    needsReview: _readBool(data['needs_review']),
   );
+}
+
+Map<String, PrayerEditMeta> _readPrayerEditMeta(dynamic raw) {
+  if (raw is! Map) return const {};
+  final result = <String, PrayerEditMeta>{};
+  for (final entry in raw.entries) {
+    final key = entry.key?.toString();
+    final value = entry.value;
+    if (key == null || value is! Map) continue;
+    final name = _readString(value['name']) ??
+        _readString(value['name_private']) ??
+        _readString(value['updated_by_name']);
+    final updatedAt =
+        _readDate(value['updated_at']) ?? _readDate(value['created_at']);
+    if (name == null || updatedAt == null) continue;
+    result[key] = PrayerEditMeta(
+      name: name,
+      phone: _readString(value['phone']),
+      updatedAt: updatedAt,
+      value: _readString(value['value']),
+    );
+  }
+  return result;
 }
 
 NamazTiming _mergeTimings(
@@ -1358,20 +1808,18 @@ NamazTiming _mergeTimings(
         _readPrayerTiming('juma', flatData['timings.juma']) ??
         _readPrayerTiming('juma', flatData['juma']) ??
         fallback?.juma,
-    eidUlFitr: _readTiming(map['eid_ul_fitr']) ??
-        _readTiming(flatData['timings.eid_ul_fitr']) ??
-        _readTiming(flatData['eid_ul_fitr']) ??
+    eidUlFitr: _readPrayerTiming('eid_ul_fitr', map['eid_ul_fitr']) ??
+        _readPrayerTiming('eid_ul_fitr', flatData['timings.eid_ul_fitr']) ??
+        _readPrayerTiming('eid_ul_fitr', flatData['eid_ul_fitr']) ??
         fallback?.eidUlFitr,
-    eidUlAzha: _readTiming(map['eid_ul_azha']) ??
-        _readTiming(flatData['timings.eid_ul_azha']) ??
-        _readTiming(flatData['eid_ul_azha']) ??
+    eidUlAzha: _readPrayerTiming('eid_ul_azha', map['eid_ul_azha']) ??
+        _readPrayerTiming('eid_ul_azha', flatData['timings.eid_ul_azha']) ??
+        _readPrayerTiming('eid_ul_azha', flatData['eid_ul_azha']) ??
         fallback?.eidUlAzha,
   );
 }
 
 Mosque _withAutoCalendarMaghrib(Mosque mosque, String maghribJamaat) {
-  // Only use auto-calculated Maghrib if no manual timing has been set
-  if (mosque.timings.maghrib != null) return mosque;
   final normalizedMaghrib =
       normalizePrayerTimingInput('maghrib', maghribJamaat) ?? maghribJamaat;
   final timings = mosque.timings;
@@ -1391,10 +1839,6 @@ Mosque _withAutoCalendarMaghrib(Mosque mosque, String maghribJamaat) {
 
 String? _readPrayerTiming(String prayer, dynamic value) {
   return normalizePrayerTimingInput(prayer, _readString(value) ?? '');
-}
-
-String? _readTiming(dynamic value) {
-  return normalizeTimingInput(_readString(value) ?? '');
 }
 
 String? _readString(dynamic value) {
@@ -1420,1137 +1864,10 @@ DateTime? _readDate(dynamic value) {
   return DateTime.tryParse(value?.toString() ?? '');
 }
 
-class ContributorSignupScreen extends StatefulWidget {
-  const ContributorSignupScreen({
-    super.key,
-    required this.cityName,
-    required this.mosques,
-  });
-
-  final String cityName;
-  final List<Mosque> mosques;
-
-  @override
-  State<ContributorSignupScreen> createState() =>
-      _ContributorSignupScreenState();
-}
-
-class _ContributorSignupScreenState extends State<ContributorSignupScreen> {
-  static const _savedContributorNameKey = 'saved_contributor_name';
-  final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _cityController = TextEditingController();
-  final _areaController = TextEditingController();
-  final _newMosqueController = TextEditingController();
-  final _addressController = TextEditingController();
-  final _fajrController = TextEditingController();
-  final _zoharController = TextEditingController();
-  final _asrController = TextEditingController();
-  final _maghribController = TextEditingController();
-  final _ishaController = TextEditingController();
-  final _jumaController = TextEditingController();
-  final _eidUlFitrController = TextEditingController();
-  final _eidUlAzhaController = TextEditingController();
-  final _otpController = TextEditingController();
-
-  String _role = 'Volunteer';
-  String _maslak = 'Not specified';
-  String _mosqueMode = 'existing';
-  bool _shareContributorDetails = false;
-  Mosque? _selectedMosque;
-  bool _firebaseReady = false;
-  bool _sendingOtp = false;
-  bool _verifyingOtp = false;
-  bool _submitting = false;
-  bool _otpSent = false;
-  bool _phoneVerified = false;
-  String? _verificationId;
-  String? _pendingVerificationPhone;
-  String? _verifiedPhone;
-  String? _otpStatusMessage;
-  Timer? _nameSaveTimer;
-
-  List<Mosque> get _availableMosques {
-    final city = widget.cityName.toLowerCase().trim();
-    return widget.mosques.where((mosque) {
-      final mosqueCity = mosque.city?.toLowerCase().trim();
-      return mosqueCity == null || mosqueCity == city;
-    }).toList();
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _cityController.text = widget.cityName;
-    _selectedMosque = null;
-    _nameController.addListener(_queueContributorNameSave);
-    _loadSavedContributorName();
-    _loadVerification();
-  }
-
-  Future<void> _loadSavedContributorName() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedName = prefs.getString(_savedContributorNameKey)?.trim();
-    if (!mounted || savedName == null || savedName.isEmpty) return;
-    if (_nameController.text.trim().isEmpty) {
-      _nameController.text = savedName;
-    }
-  }
-
-  void _queueContributorNameSave() {
-    _nameSaveTimer?.cancel();
-    _nameSaveTimer = Timer(const Duration(milliseconds: 350), () async {
-      await _saveContributorNameNow();
-    });
-  }
-
-  Future<void> _saveContributorNameNow() async {
-    final name = _nameController.text.trim();
-    if (name.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_savedContributorNameKey, name);
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null && user.displayName?.trim() != name) {
-      try {
-        await user.updateDisplayName(name);
-      } catch (_) {}
-    }
-  }
-
-  Future<void> _loadVerification() async {
-    final phone = await OtpSession.loadVerifiedPhone();
-    if (phone == null || !mounted) return;
-    setState(() {
-      _verifiedPhone = phone;
-      _phoneController.text = phone;
-      _phoneVerified = true;
-      _otpStatusMessage = 'Mobile verified for this session.';
-    });
-  }
-
-  void _syncAreaFromSelectedMosque() {
-    final mosque = _selectedMosque;
-    if (mosque == null) return;
-    _areaController.text = mosque.area;
-  }
-
-  @override
-  void dispose() {
-    _nameSaveTimer?.cancel();
-    _nameController.removeListener(_queueContributorNameSave);
-    _nameController.dispose();
-    _phoneController.dispose();
-    _cityController.dispose();
-    _areaController.dispose();
-    _newMosqueController.dispose();
-    _addressController.dispose();
-    _fajrController.dispose();
-    _zoharController.dispose();
-    _asrController.dispose();
-    _maghribController.dispose();
-    _ishaController.dispose();
-    _jumaController.dispose();
-    _eidUlFitrController.dispose();
-    _eidUlAzhaController.dispose();
-    _otpController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Contribute — Add or Update Mosque')),
-      body: SafeArea(
-        child: Form(
-          key: _formKey,
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              Text(
-                'Update timings or add a new mosque',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w900,
-                    ),
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                'Verify your phone number, then update timings directly.',
-                style: TextStyle(color: Colors.black54),
-              ),
-              const SizedBox(height: 20),
-              TextFormField(
-                controller: _nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Your name *',
-                  helperText: 'Required for leaderboard and certificate.',
-                  border: OutlineInputBorder(),
-                ),
-                validator: _required,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _phoneController,
-                enabled: !_phoneVerified && !_otpSent,
-                keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(
-                  labelText: 'Phone number (with country code)',
-                  hintText: '+447911123456',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (value) => _normalizeE164Phone(value ?? '') == null
-                    ? 'Enter a valid international phone number'
-                    : null,
-              ),
-              const SizedBox(height: 10),
-              _OtpVerificationPanel(
-                otpController: _otpController,
-                otpSent: _otpSent,
-                phoneVerified: _phoneVerified,
-                sendingOtp: _sendingOtp,
-                verifyingOtp: _verifyingOtp,
-                statusMessage: _otpStatusMessage,
-                onSendOtp: _sendOtp,
-                onVerifyOtp: _verifyOtp,
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: _role,
-                decoration: const InputDecoration(
-                  labelText: 'Role',
-                  border: OutlineInputBorder(),
-                ),
-                items: const [
-                  DropdownMenuItem(
-                      value: 'Volunteer', child: Text('Volunteer')),
-                  DropdownMenuItem(value: 'Muazzin', child: Text('Muazzin')),
-                  DropdownMenuItem(value: 'Imam', child: Text('Imam')),
-                ],
-                onChanged: (value) => setState(() => _role = value ?? _role),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _cityController,
-                      readOnly: true,
-                      decoration: const InputDecoration(
-                        labelText: 'City',
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: _required,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _areaController,
-                      decoration: const InputDecoration(
-                        labelText: 'Area',
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: _required,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: _maslak,
-                decoration: const InputDecoration(
-                  labelText: 'School of Thought (Maslak)',
-                  border: OutlineInputBorder(),
-                ),
-                items: const [
-                  DropdownMenuItem(
-                    value: 'Not specified',
-                    child: Text('Not specified'),
-                  ),
-                  DropdownMenuItem(value: 'Barelvi', child: Text('Barelvi')),
-                  DropdownMenuItem(value: 'Deobandi', child: Text('Deobandi')),
-                  DropdownMenuItem(
-                    value: 'Ahl-e-Hadees',
-                    child: Text('Ahl-e-Hadees'),
-                  ),
-                  DropdownMenuItem(value: 'Shia', child: Text('Shia')),
-                  DropdownMenuItem(value: 'Other', child: Text('Other')),
-                ],
-                onChanged: (value) =>
-                    setState(() => _maslak = value ?? _maslak),
-              ),
-              const SizedBox(height: 16),
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(value: 'existing', label: Text('Existing')),
-                  ButtonSegment(value: 'new', label: Text('New mosque')),
-                ],
-                selected: {_mosqueMode},
-                onSelectionChanged: (values) {
-                  setState(() {
-                    _mosqueMode = values.first;
-                    _selectedMosque = null;
-                    _areaController.clear();
-                  });
-                },
-              ),
-              const SizedBox(height: 12),
-              if (_mosqueMode == 'existing')
-                _MosqueSelectorField(
-                  selectedMosque: _selectedMosque,
-                  mosqueCount: _availableMosques.length,
-                  onTap: _pickExistingMosque,
-                )
-              else ...[
-                TextFormField(
-                  controller: _newMosqueController,
-                  decoration: const InputDecoration(
-                    labelText: 'New mosque name',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: _mosqueMode == 'new' ? _required : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _addressController,
-                  decoration: const InputDecoration(
-                    labelText: 'Address / landmark',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: _mosqueMode == 'new' ? _required : null,
-                ),
-              ],
-              if (_mosqueMode == 'existing') ...[
-                const SizedBox(height: 8),
-                Text(
-                  'Showing ${_availableMosques.length} masjids from ${widget.cityName} listing.',
-                  style: const TextStyle(color: Colors.black54, fontSize: 12),
-                ),
-              ] else ...[
-                const SizedBox(height: 8),
-                Text(
-                  'New mosque will be submitted for ${widget.cityName}.',
-                  style: const TextStyle(color: Colors.black54, fontSize: 12),
-                ),
-              ],
-              const SizedBox(height: 20),
-              Text(
-                'Namaz timings',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w900,
-                    ),
-              ),
-              const SizedBox(height: 10),
-              _TimingInputGrid(
-                fajrController: _fajrController,
-                zoharController: _zoharController,
-                asrController: _asrController,
-                maghribController: _maghribController,
-                ishaController: _ishaController,
-                jumaController: _jumaController,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Eid Namaz timings',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(height: 4),
-              const Text('Eid timings are annual — update once a year.',
-                  style: TextStyle(color: Colors.black54, fontSize: 12)),
-              const SizedBox(height: 10),
-              Row(children: [
-                Expanded(
-                    child: InkWell(
-                  onTap: () async {
-                    final p = await showTimePicker(
-                        context: context,
-                        initialTime: TimeOfDay.now(),
-                        helpText: 'Eid ul Fitr',
-                        builder: (context, child) => MediaQuery(
-                            data: MediaQuery.of(context)
-                                .copyWith(alwaysUse24HourFormat: false),
-                            child: child!));
-                    if (p != null) {
-                      _eidUlFitrController.text =
-                          '${p.hour.toString().padLeft(2, '0')}:${p.minute.toString().padLeft(2, '0')}';
-                    }
-                  },
-                  borderRadius: BorderRadius.circular(8),
-                  child: InputDecorator(
-                    decoration: const InputDecoration(
-                        labelText: 'Eid ul Fitr',
-                        border: OutlineInputBorder(),
-                        suffixIcon: Icon(Icons.access_time)),
-                    child: ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: _eidUlFitrController,
-                      builder: (context, value, _) => Text(
-                          value.text.isEmpty
-                              ? 'Tap to set'
-                              : formatStoredTime(value.text),
-                          style: TextStyle(
-                              color: value.text.isEmpty
-                                  ? Colors.black38
-                                  : Colors.black87,
-                              fontSize: 15)),
-                    ),
-                  ),
-                )),
-                const SizedBox(width: 10),
-                Expanded(
-                    child: InkWell(
-                  onTap: () async {
-                    final p = await showTimePicker(
-                        context: context,
-                        initialTime: TimeOfDay.now(),
-                        helpText: 'Eid ul Azha',
-                        builder: (context, child) => MediaQuery(
-                            data: MediaQuery.of(context)
-                                .copyWith(alwaysUse24HourFormat: false),
-                            child: child!));
-                    if (p != null) {
-                      _eidUlAzhaController.text =
-                          '${p.hour.toString().padLeft(2, '0')}:${p.minute.toString().padLeft(2, '0')}';
-                    }
-                  },
-                  borderRadius: BorderRadius.circular(8),
-                  child: InputDecorator(
-                    decoration: const InputDecoration(
-                        labelText: 'Eid ul Azha',
-                        border: OutlineInputBorder(),
-                        suffixIcon: Icon(Icons.access_time)),
-                    child: ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: _eidUlAzhaController,
-                      builder: (context, value, _) => Text(
-                          value.text.isEmpty
-                              ? 'Tap to set'
-                              : formatStoredTime(value.text),
-                          style: TextStyle(
-                              color: value.text.isEmpty
-                                  ? Colors.black38
-                                  : Colors.black87,
-                              fontSize: 15)),
-                    ),
-                  ),
-                )),
-              ]),
-              const SizedBox(height: 18),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _shareContributorDetails,
-                title: const Text('Publicly show my name and number'),
-                subtitle: const Text(
-                  'Optional: only if you want namazis to contact you.',
-                  style: TextStyle(fontSize: 12),
-                ),
-                onChanged: (value) =>
-                    setState(() => _shareContributorDetails = value),
-              ),
-              const SizedBox(height: 8),
-              FilledButton.icon(
-                onPressed: _submitting ? null : _submit,
-                icon: const Icon(Icons.send),
-                label: Text(_submitting ? 'Submitting...' : 'Submit update'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _pickExistingMosque() async {
-    final selected = await showModalBottomSheet<Mosque>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _MosquePickerSheet(
-        mosques: _availableMosques,
-        selectedMosque: _selectedMosque,
-        cityName: widget.cityName,
-      ),
-    );
-    if (selected == null || !mounted) return;
-    setState(() {
-      _selectedMosque = selected;
-      _syncAreaFromSelectedMosque();
-    });
-  }
-
-  String? _required(String? value) {
-    if (value == null || value.trim().isEmpty) return 'Required';
-    return null;
-  }
-
-  Future<void> _ensureFirebase() async {
-    if (_firebaseReady) return;
-    await Firebase.initializeApp();
-    _firebaseReady = true;
-  }
-
-  Future<void> _markPhoneVerified(String phone) async {
-    final normalized = _normalizeE164Phone(phone);
-    if (normalized == null) {
-      throw FirebaseAuthException(code: 'invalid-phone-number');
-    }
-    await OtpSession.saveVerifiedPhone(normalized);
-    await _saveContributorNameNow();
-    if (!mounted) return;
-    setState(() {
-      _verifiedPhone = normalized;
-      _phoneController.text = normalized;
-      _phoneVerified = true;
-      _otpSent = true;
-      _otpStatusMessage = 'Mobile verified for this session.';
-    });
-  }
-
-  Future<void> _sendOtp() async {
-    final phone = _normalizeE164Phone(_phoneController.text);
-    if (phone == null) {
-      setState(() =>
-          _otpStatusMessage = 'Enter a valid international phone number.');
-      return;
-    }
-    await _saveContributorNameNow();
-
-    setState(() {
-      _sendingOtp = true;
-      _otpStatusMessage = 'Sending OTP...';
-    });
-
-    try {
-      await _ensureFirebase();
-      _pendingVerificationPhone = phone;
-      await FirebaseAuth.instance.verifyPhoneNumber(
-        phoneNumber: phone,
-        verificationCompleted: (credential) async {
-          await FirebaseAuth.instance.signInWithCredential(credential);
-          await _markPhoneVerified(_firebaseAuthPhone() ?? phone);
-        },
-        verificationFailed: (error) {
-          if (!mounted) return;
-          setState(() {
-            _otpStatusMessage =
-                error.message ?? 'OTP failed. Check Firebase setup.';
-          });
-        },
-        codeSent: (verificationId, resendToken) {
-          if (!mounted) return;
-          setState(() {
-            _verificationId = verificationId;
-            _otpSent = true;
-            _otpStatusMessage = 'OTP sent. Enter code to verify.';
-          });
-        },
-        codeAutoRetrievalTimeout: (verificationId) {
-          _verificationId = verificationId;
-        },
-        timeout: const Duration(seconds: 60),
-      );
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _otpStatusMessage =
-              'Firebase is not configured yet. Add google-services.json and enable Phone Auth.';
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _sendingOtp = false);
-    }
-  }
-
-  Future<void> _verifyOtp() async {
-    if (_verificationId == null || _otpController.text.trim().isEmpty) {
-      setState(() => _otpStatusMessage = 'Enter the OTP code.');
-      return;
-    }
-
-    setState(() {
-      _verifyingOtp = true;
-      _otpStatusMessage = null;
-    });
-
-    try {
-      final credential = PhoneAuthProvider.credential(
-        verificationId: _verificationId!,
-        smsCode: _otpController.text.trim(),
-      );
-      await FirebaseAuth.instance.signInWithCredential(credential);
-      final phone = _firebaseAuthPhone() ?? _pendingVerificationPhone;
-      if (phone == null) {
-        throw FirebaseAuthException(code: 'missing-phone-number');
-      }
-      await _markPhoneVerified(phone);
-    } on FirebaseAuthException catch (error) {
-      setState(() {
-        _otpStatusMessage = error.message ?? 'Invalid OTP.';
-      });
-    } finally {
-      if (mounted) setState(() => _verifyingOtp = false);
-    }
-  }
-
-  Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    final contributorName = _cleanContributorName(_nameController.text);
-    _nameController.text = contributorName;
-    await _saveContributorNameNow();
-    if (!mounted) return;
-    if (!_phoneVerified) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Verify mobile number with OTP first.')),
-      );
-      return;
-    }
-    final verifiedPhone =
-        _verifiedPhone ?? await OtpSession.loadVerifiedPhone();
-    if (!mounted) return;
-    if (verifiedPhone == null || _normalizeE164Phone(verifiedPhone) == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Verify mobile number with OTP again.')),
-      );
-      return;
-    }
-
-    setState(() => _submitting = true);
-    final mosqueName = _mosqueMode == 'existing'
-        ? _selectedMosque?.name ?? 'Selected mosque'
-        : _newMosqueController.text.trim();
-
-    try {
-      await _ensureFirebase();
-      final db = FirebaseFirestore.instance;
-      final submittedTimings = <String, String>{
-        if (normalizePrayerTimingInput('fajr', _fajrController.text) != null)
-          'fajr': normalizePrayerTimingInput('fajr', _fajrController.text)!,
-        if (normalizePrayerTimingInput('zohar', _zoharController.text) != null)
-          'zohar': normalizePrayerTimingInput('zohar', _zoharController.text)!,
-        if (normalizePrayerTimingInput('asr', _asrController.text) != null)
-          'asr': normalizePrayerTimingInput('asr', _asrController.text)!,
-        if (normalizePrayerTimingInput('maghrib', _maghribController.text) !=
-            null)
-          'maghrib':
-              normalizePrayerTimingInput('maghrib', _maghribController.text)!,
-        if (normalizePrayerTimingInput('isha', _ishaController.text) != null)
-          'isha': normalizePrayerTimingInput('isha', _ishaController.text)!,
-        if (normalizePrayerTimingInput('juma', _jumaController.text) != null)
-          'juma': normalizePrayerTimingInput('juma', _jumaController.text)!,
-        if (normalizeTimingInput(_eidUlFitrController.text) != null)
-          'eid_ul_fitr': normalizeTimingInput(_eidUlFitrController.text)!,
-        if (normalizeTimingInput(_eidUlAzhaController.text) != null)
-          'eid_ul_azha': normalizeTimingInput(_eidUlAzhaController.text)!,
-      };
-      if (submittedTimings.isEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Please enter at least one prayer time.')),
-        );
-        setState(() => _submitting = false);
-        return;
-      }
-
-      final timingData = {
-        if (_shareContributorDetails)
-          'timing_verified_by_name': contributorName,
-        if (_shareContributorDetails) 'timing_verified_by_phone': verifiedPhone,
-        'timing_verification_status': 'source_verified',
-        'contributor_contact_shared': _shareContributorDetails,
-        'verified_by_phone_private': verifiedPhone,
-        'verified_by_name_private': contributorName,
-        'role': _role,
-        'maslak': _maslak,
-        'city': _cityController.text.trim(),
-        'area': _areaController.text.trim(),
-        'timing_updated_at': FieldValue.serverTimestamp(),
-        if (_selectedMosque?.placeId != null)
-          'place_id': _selectedMosque!.placeId!,
-      };
-
-      final city = _cityController.text.trim();
-      // Use actual Firestore doc ID when updating existing mosque
-      final mosqueDocId = (_mosqueMode == 'existing' && _selectedMosque?.firestoreDocId != null)
-          ? _selectedMosque!.firestoreDocId!
-          : _mosqueDocId(mosqueName, city);
-      final mosqueRef = db.collection('mosques').doc(mosqueDocId);
-      if (_mosqueMode == 'existing' && _selectedMosque != null) {
-        await mosqueRef.set({
-          'name': mosqueName,
-          'city': city,
-          'address': _selectedMosque?.address ?? '',
-          'latitude': _selectedMosque?.latitude,
-          'longitude': _selectedMosque?.longitude,
-          ...timingData,
-        }, SetOptions(merge: true));
-        // Update individual timing fields to preserve other prayers
-        await mosqueRef.update({
-          for (final e in submittedTimings.entries) 'timings.${e.key}': e.value,
-        });
-      } else {
-        await mosqueRef.set({
-          'name': mosqueName,
-          'city': city,
-          'address': _addressController.text.trim(),
-          ...timingData,
-        }, SetOptions(merge: true));
-        await mosqueRef.update({
-          for (final e in submittedTimings.entries) 'timings.${e.key}': e.value,
-        });
-      }
-
-      await db.collection('contribution_logs').add({
-        'name': contributorName,
-        'phone': verifiedPhone,
-        'uid': FirebaseAuth.instance.currentUser?.uid,
-        'city': _cityController.text.trim(),
-        'mosque_name': mosqueName,
-        'mode': _mosqueMode,
-        'created_at': FieldValue.serverTimestamp(),
-      });
-
-      final contributorUid = FirebaseAuth.instance.currentUser?.uid;
-      if (contributorUid == null || contributorUid.isEmpty) {
-        throw FirebaseAuthException(code: 'missing-user-id');
-      }
-      final topRef = db.collection('top_contributors').doc(contributorUid);
-      await db.runTransaction((txn) async {
-        final snap = await txn.get(topRef);
-        final current = (snap.data()?['score'] as num?)?.toInt() ?? 0;
-        txn.set(
-            topRef,
-            {
-              'name': contributorName,
-              'score': current + 1,
-              'updated_at': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true));
-      });
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$mosqueName updated successfully! ✅')),
-      );
-      Navigator.of(context).pop();
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not submit. Check Firebase setup and internet.'),
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _submitting = false);
-    }
-  }
-
-  String? _normalizeE164Phone(String value) {
-    final normalized = value.replaceAll(RegExp(r'\s+'), '');
-    if (RegExp(r'^\+[1-9]\d{7,14}$').hasMatch(normalized)) {
-      return normalized;
-    }
-    return null;
-  }
-
-  String? _firebaseAuthPhone() {
-    final phone = FirebaseAuth.instance.currentUser?.phoneNumber;
-    return phone == null ? null : _normalizeE164Phone(phone);
-  }
-}
-
-class _MosqueSelectorField extends StatelessWidget {
-  const _MosqueSelectorField({
-    required this.selectedMosque,
-    required this.mosqueCount,
-    required this.onTap,
-  });
-
-  final Mosque? selectedMosque;
-  final int mosqueCount;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final mosque = selectedMosque;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: InputDecorator(
-        decoration: const InputDecoration(
-          labelText: 'Select mosque from current listing',
-          border: OutlineInputBorder(),
-          suffixIcon: Icon(Icons.search),
-        ),
-        child: mosque == null
-            ? Text(
-                mosqueCount == 0
-                    ? 'No mosque in current listing'
-                    : 'Search $mosqueCount masjids',
-                style: const TextStyle(color: Colors.black54),
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    mosque.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${mosque.area} - ${_MosqueCard._distanceLabel(mosque)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.black54),
-                  ),
-                ],
-              ),
-      ),
-    );
-  }
-}
-
-class _MosquePickerSheet extends StatefulWidget {
-  const _MosquePickerSheet({
-    required this.mosques,
-    required this.selectedMosque,
-    required this.cityName,
-  });
-
-  final List<Mosque> mosques;
-  final Mosque? selectedMosque;
-  final String cityName;
-
-  @override
-  State<_MosquePickerSheet> createState() => _MosquePickerSheetState();
-}
-
-class _MosquePickerSheetState extends State<_MosquePickerSheet> {
-  final _search = TextEditingController();
-  late List<Mosque> _filtered;
-
-  @override
-  void initState() {
-    super.initState();
-    _filtered = widget.mosques;
-  }
-
-  @override
-  void dispose() {
-    _search.dispose();
-    super.dispose();
-  }
-
-  void _onSearch(String value) {
-    final query = value.trim().toLowerCase();
-    setState(() {
-      _filtered = widget.mosques.where((mosque) {
-        if (query.isEmpty) return true;
-        return mosque.name.toLowerCase().contains(query) ||
-            mosque.area.toLowerCase().contains(query) ||
-            mosque.address.toLowerCase().contains(query);
-      }).toList();
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.88,
-      minChildSize: 0.5,
-      maxChildSize: 0.95,
-      expand: false,
-      builder: (context, scrollController) {
-        return Column(
-          children: [
-            const SizedBox(height: 12),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.black26,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: TextField(
-                controller: _search,
-                autofocus: true,
-                decoration: InputDecoration(
-                  hintText:
-                      'Search ${widget.cityName} mosques, areas or landmarks',
-                  prefixIcon: const Icon(Icons.search),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  contentPadding: EdgeInsets.zero,
-                ),
-                onChanged: _onSearch,
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '${_filtered.length} of ${widget.mosques.length} masjids',
-                  style: const TextStyle(color: Colors.black54, fontSize: 12),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: _filtered.isEmpty
-                  ? const Center(child: Text('No mosque found.'))
-                  : ListView.separated(
-                      controller: scrollController,
-                      itemCount: _filtered.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final mosque = _filtered[index];
-                        final sel = widget.selectedMosque;
-                        final selected = sel != null &&
-                            ((mosque.placeId != null &&
-                                    mosque.placeId == sel.placeId) ||
-                                (mosque.name == sel.name &&
-                                    mosque.area == sel.area));
-                        return ListTile(
-                          leading: Icon(
-                            selected ? Icons.check_circle : Icons.mosque,
-                            color: const Color(0xFF0F7C68),
-                          ),
-                          title: Text(
-                            mosque.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontWeight:
-                                  selected ? FontWeight.w900 : FontWeight.w700,
-                            ),
-                          ),
-                          subtitle: Text(
-                            '${mosque.area} - ${_MosqueCard._distanceLabel(mosque)}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          onTap: () => Navigator.of(context).pop(mosque),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _OtpVerificationPanel extends StatelessWidget {
-  const _OtpVerificationPanel({
-    required this.otpController,
-    required this.otpSent,
-    required this.phoneVerified,
-    required this.sendingOtp,
-    required this.verifyingOtp,
-    required this.statusMessage,
-    required this.onSendOtp,
-    required this.onVerifyOtp,
-  });
-
-  final TextEditingController otpController;
-  final bool otpSent;
-  final bool phoneVerified;
-  final bool sendingOtp;
-  final bool verifyingOtp;
-  final String? statusMessage;
-  final VoidCallback onSendOtp;
-  final VoidCallback onVerifyOtp;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEAF7F3),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                phoneVerified ? Icons.verified : Icons.sms,
-                color: const Color(0xFF0F7C68),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  phoneVerified ? 'Mobile verified' : 'OTP verification',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-              ),
-              FilledButton.icon(
-                onPressed: sendingOtp || phoneVerified ? null : onSendOtp,
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF0F7C68),
-                  disabledBackgroundColor: Colors.black26,
-                  foregroundColor: Colors.white,
-                  disabledForegroundColor: Colors.white70,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                ),
-                icon: sendingOtp
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.send_to_mobile),
-                label: Text(
-                  sendingOtp
-                      ? 'Sending...'
-                      : otpSent
-                          ? 'Resend OTP'
-                          : 'Send OTP',
-                ),
-              ),
-            ],
-          ),
-          if (otpSent && !phoneVerified) ...[
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: otpController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'OTP code',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: verifyingOtp ? null : onVerifyOtp,
-                  child: Text(verifyingOtp ? 'Checking...' : 'Verify'),
-                ),
-              ],
-            ),
-          ],
-          if (statusMessage != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              statusMessage!,
-              style: TextStyle(
-                color: phoneVerified ? const Color(0xFF0F7C68) : Colors.black54,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _TimingInputGrid extends StatefulWidget {
-  const _TimingInputGrid({
-    required this.fajrController,
-    required this.zoharController,
-    required this.asrController,
-    required this.maghribController,
-    required this.ishaController,
-    required this.jumaController,
-  });
-
-  final TextEditingController fajrController;
-  final TextEditingController zoharController;
-  final TextEditingController asrController;
-  final TextEditingController maghribController;
-  final TextEditingController ishaController;
-  final TextEditingController jumaController;
-
-  @override
-  State<_TimingInputGrid> createState() => _TimingInputGridState();
-}
-
-class _TimingInputGridState extends State<_TimingInputGrid> {
-  Future<void> _pick(
-      BuildContext ctx, TextEditingController ctrl, String label) async {
-    final p = await showTimePicker(
-      context: ctx,
-      initialTime: TimeOfDay.now(),
-      helpText: label,
-      builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
-        child: child!,
-      ),
-    );
-    if (p != null) {
-      ctrl.text =
-          '${p.hour.toString().padLeft(2, '0')}:${p.minute.toString().padLeft(2, '0')}';
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final fields = [
-      ('Fajr', 'fajr', widget.fajrController),
-      ('Zohar', 'zohar', widget.zoharController),
-      ('Asr', 'asr', widget.asrController),
-      ('Maghrib', 'maghrib', widget.maghribController),
-      ('Isha', 'isha', widget.ishaController),
-      ('Juma', 'juma', widget.jumaController),
-    ];
-
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: fields.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        mainAxisExtent: 76,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-      ),
-      itemBuilder: (context, index) {
-        final field = fields[index];
-        return InkWell(
-          onTap: () => _pick(context, field.$3, field.$1),
-          borderRadius: BorderRadius.circular(8),
-          child: InputDecorator(
-            decoration: InputDecoration(
-              labelText: field.$1,
-              border: const OutlineInputBorder(),
-              suffixIcon: const Icon(Icons.access_time),
-            ),
-            child: ValueListenableBuilder<TextEditingValue>(
-              valueListenable: field.$3,
-              builder: (context, value, _) => Text(
-                value.text.isEmpty
-                    ? 'Tap to set'
-                    : formatPrayerStoredTime(field.$2, value.text),
-                style: TextStyle(
-                  color: value.text.isEmpty ? Colors.black38 : Colors.black87,
-                  fontSize: 15,
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
+String? _cleanContributorNameOrNull(Object? value) {
+  final name = value?.toString().trim() ?? '';
+  if (name.isEmpty || name.toLowerCase() == 'namaz volunteer') return null;
+  return name;
 }
 
 class _RewardsPreviewCard extends StatelessWidget {
@@ -2559,1376 +1876,28 @@ class _RewardsPreviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF7E8),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFFFE4B4)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.workspace_premium, color: Color(0xFFB8860B)),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: Text(
-              'Contributor Rewards, Stars and Certificates',
-              style: TextStyle(fontWeight: FontWeight.w800),
-            ),
-          ),
-          TextButton(onPressed: onOpen, child: const Text('Open')),
-        ],
-      ),
-    );
-  }
-}
-
-int _readContributorInt(Map<String, dynamic> data, List<String> keys) {
-  for (final key in keys) {
-    final value = data[key];
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-  }
-  return 0;
-}
-
-String _cleanContributorName(Object? value) {
-  final name = value?.toString().trim() ?? '';
-  return name.isEmpty ? 'Namaz Volunteer' : name;
-}
-
-const _namazAndroidAppUrl =
-    'https://play.google.com/store/apps/details?id=com.food4u.namaznearme';
-
-class RewardsScreen extends StatefulWidget {
-  const RewardsScreen({super.key, required this.onBackfill});
-
-  final Future<void> Function() onBackfill;
-
-  @override
-  State<RewardsScreen> createState() => _RewardsScreenState();
-}
-
-class _RewardsScreenState extends State<RewardsScreen> {
-  static const _targetScore = 150;
-  final _certificateKey = GlobalKey();
-  var _sharingCertificate = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.onBackfill().ignore();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Contributor Rewards')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: FirebaseFirestore.instance
-                .collection('top_contributors')
-                .orderBy('score', descending: true)
-                .limit(20)
-                .snapshots(),
-            builder: (context, snapshot) {
-              final docs = snapshot.data?.docs ?? [];
-              if (docs.isEmpty) {
-                return const _EmptyRewardsState();
-              }
-              final topContributor = docs.first.data();
-              final topName = _cleanContributorName(topContributor['name']);
-              final topScore = _readContributorInt(topContributor, ['score']);
-              final masjidCount = _readContributorInt(
-                topContributor,
-                ['masjids', 'masjidCount', 'mosques'],
-              );
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _ContributorHeroCard(
-                    name: topName,
-                    score: topScore,
-                    masjidCount: masjidCount,
-                    rank: 1,
-                  ),
-                  const SizedBox(height: 16),
-                  const _RewardsSectionTitle('Leaderboard'),
-                  for (var i = 0; i < docs.length; i++)
-                    _LeaderboardTile(
-                      rank: i + 1,
-                      name: _cleanContributorName(docs[i].data()['name']),
-                      score: _readContributorInt(docs[i].data(), ['score']),
-                    ),
-                  const SizedBox(height: 18),
-                  _MyProgressSection(
-                    targetScore: _targetScore,
-                    sharingCertificate: _sharingCertificate,
-                    onPreviewCertificate: _openCertificatePreview,
-                    onShareWhatsApp: _shareCertificateText,
-                    onCopyLink: _copyAppLink,
-                    onOpenAppLink: _openAppLink,
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _certificateShareText(String name) {
-    return 'Jazakallah Khair to $name for helping keep masjid namaz timings accurate on Namaz Near Me.\n\nDownload Namaz Near Me:\n$_namazAndroidAppUrl';
-  }
-
-  Future<void> _shareCertificate(String name) async {
-    if (_sharingCertificate) return;
-    setState(() => _sharingCertificate = true);
-    try {
-      await Future<void>.delayed(const Duration(milliseconds: 80));
-      final boundary = _certificateKey.currentContext?.findRenderObject()
-          as RenderRepaintBoundary?;
-      if (boundary == null) {
-        throw StateError('Certificate is not ready yet.');
-      }
-      final image = await boundary.toImage(pixelRatio: 4);
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      final bytes = byteData?.buffer.asUint8List();
-      if (bytes == null) {
-        throw StateError('Could not render certificate.');
-      }
-      final directory = await getTemporaryDirectory();
-      final safeName = name
-          .trim()
-          .toLowerCase()
-          .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
-          .replaceAll(RegExp(r'^-|-$'), '');
-      final file = File(
-        '${directory.path}/namaz-near-me-certificate-${safeName.isEmpty ? 'contributor' : safeName}.png',
-      );
-      await file.writeAsBytes(bytes, flush: true);
-      await SharePlus.instance.share(
-        ShareParams(
-          title: 'Namaz Near Me Volunteer Appreciation',
-          subject: 'Namaz Near Me Volunteer Appreciation',
-          text: _certificateShareText(name),
-          files: [
-            XFile(
-              file.path,
-              mimeType: 'image/png',
-              name: 'namaz-near-me-volunteer-certificate.png',
-            ),
-          ],
-        ),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Certificate share failed: $error')),
-      );
-    } finally {
-      if (mounted) setState(() => _sharingCertificate = false);
-    }
-  }
-
-  Future<void> _shareCertificateText(String name) async {
-    await SharePlus.instance.share(
-      ShareParams(
-        title: 'Namaz Near Me',
-        text: _certificateShareText(name),
-      ),
-    );
-  }
-
-  Future<void> _copyAppLink() async {
-    await Clipboard.setData(const ClipboardData(text: _namazAndroidAppUrl));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('App download link copied.')),
-    );
-  }
-
-  Future<void> _openAppLink() async {
-    await launchUrl(
-      Uri.parse(_namazAndroidAppUrl),
-      mode: LaunchMode.externalApplication,
-    );
-  }
-
-  Future<void> _openCertificatePreview(
-    String name,
-    int score,
-    int masjidCount,
-  ) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: DraggableScrollableSheet(
-            initialChildSize: .82,
-            minChildSize: .55,
-            maxChildSize: .95,
-            expand: false,
-            builder: (context, scrollController) {
-              return Container(
-                decoration: const BoxDecoration(
-                  color: Color(0xFFF6FBF9),
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                ),
-                child: ListView(
-                  controller: scrollController,
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 44,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFCCD8D5),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'Certificate Preview',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Close',
-                          onPressed: () => Navigator.of(sheetContext).pop(),
-                          icon: const Icon(Icons.close),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    RepaintBoundary(
-                      key: _certificateKey,
-                      child: _ShareableCertificate(
-                        name: name,
-                        score: score,
-                        masjidCount: masjidCount,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    FilledButton.icon(
-                      onPressed: _sharingCertificate
-                          ? null
-                          : () => _shareCertificate(name),
-                      icon: const Icon(Icons.ios_share),
-                      label: const Text('Share Certificate'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF0F7C68),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: () => _shareCertificateText(name),
-                            icon: const Icon(Icons.chat_bubble_outline),
-                            label: const Text('WhatsApp'),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: _openAppLink,
-                            icon: const Icon(Icons.download_outlined),
-                            label: const Text('App Link'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    TextButton.icon(
-                      onPressed: _copyAppLink,
-                      icon: const Icon(Icons.link),
-                      label: const Text('Copy Android download link'),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _EmptyRewardsState extends StatelessWidget {
-  const _EmptyRewardsState();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEFFAF7),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFD6EEE8)),
-      ),
-      child: const Column(
-        children: [
-          Icon(Icons.workspace_premium, color: Color(0xFF0F7C68), size: 42),
-          SizedBox(height: 10),
-          Text('No contributors yet.',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
-          SizedBox(height: 6),
-          Text(
-            'Approved timing updates will appear here as community rewards.',
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RewardsSectionTitle extends StatelessWidget {
-  const _RewardsSectionTitle(this.title);
-
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text(
-        title.toUpperCase(),
-        style: const TextStyle(
-          color: Color(0xFF555A60),
-          fontSize: 16,
-          fontWeight: FontWeight.w900,
-          letterSpacing: .3,
-        ),
-      ),
-    );
-  }
-}
-
-class _ContributorHeroCard extends StatelessWidget {
-  const _ContributorHeroCard({
-    required this.name,
-    required this.score,
-    required this.masjidCount,
-    required this.rank,
-  });
-
-  final String name;
-  final int score;
-  final int masjidCount;
-  final int rank;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF0F7C68), Color(0xFF128E78)],
-        ),
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF0F7C68).withValues(alpha: .18),
-            blurRadius: 18,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              _InitialsAvatar(name: name, radius: 28),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    const Text(
-                      'Top Contributor · Moradabad',
-                      style: TextStyle(
-                        color: Color(0xCCEFFFFB),
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(child: _HeroStat(value: '$score', label: 'Updates')),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _HeroStat(
-                  value: masjidCount == 0 ? '—' : '$masjidCount',
-                  label: 'Masjids',
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(child: _HeroStat(value: '#$rank', label: 'Rank')),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _InitialsAvatar extends StatelessWidget {
-  const _InitialsAvatar({required this.name, required this.radius});
-
-  final String name;
-  final double radius;
-
-  @override
-  Widget build(BuildContext context) {
-    final initials = name
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((part) => part.isNotEmpty)
-        .take(2)
-        .map((part) => part[0].toUpperCase())
-        .join();
-    return CircleAvatar(
-      radius: radius,
-      backgroundColor: const Color(0xFFBDEEE4).withValues(alpha: .42),
-      child: Text(
-        initials.isEmpty ? 'NN' : initials,
-        style: const TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w900,
-          fontSize: 18,
-        ),
-      ),
-    );
-  }
-}
-
-class _HeroStat extends StatelessWidget {
-  const _HeroStat({required this.value, required this.label});
-
-  final String value;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: .18),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xDDEFFFFB),
-              fontWeight: FontWeight.w700,
-              fontSize: 12,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MyProgressSection extends StatelessWidget {
-  const _MyProgressSection({
-    required this.targetScore,
-    required this.sharingCertificate,
-    required this.onPreviewCertificate,
-    required this.onShareWhatsApp,
-    required this.onCopyLink,
-    required this.onOpenAppLink,
-  });
-
-  final int targetScore;
-  final bool sharingCertificate;
-  final Future<void> Function(String, int, int) onPreviewCertificate;
-  final Future<void> Function(String) onShareWhatsApp;
-  final Future<void> Function() onCopyLink;
-  final Future<void> Function() onOpenAppLink;
-
-  @override
-  Widget build(BuildContext context) {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 16),
-        child: Text(
-          'Verify your mobile number to track your progress.',
-          style: TextStyle(color: Colors.grey),
-        ),
-      );
-    }
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('top_contributors')
-          .doc(uid)
-          .snapshots(),
-      builder: (context, snap) {
-        final data = snap.data?.data();
-        final myScore = data != null
-            ? _readContributorInt(data, ['score'])
-            : 0;
-        final myMasjidCount = data != null
-            ? _readContributorInt(data, ['masjids', 'masjidCount', 'mosques'])
-            : 0;
-        final myName = data != null ? _cleanContributorName(data['name']) : '';
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const _RewardsSectionTitle('Your Progress'),
-            _ProgressRewardCard(score: myScore, target: targetScore),
-            const SizedBox(height: 16),
-            const _RewardsSectionTitle('Achievements'),
-            _AchievementsGrid(score: myScore, masjidCount: myMasjidCount),
-            const SizedBox(height: 16),
-            _CertificateTemplateCard(
-              name: myName,
-              score: myScore,
-              masjidCount: myMasjidCount,
-              isSharing: sharingCertificate,
-              onPreviewCertificate: () =>
-                  onPreviewCertificate(myName, myScore, myMasjidCount),
-              onShareWhatsApp: () => onShareWhatsApp(myName),
-              onCopyLink: onCopyLink,
-              onOpenAppLink: onOpenAppLink,
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _ProgressRewardCard extends StatelessWidget {
-  const _ProgressRewardCard({required this.score, required this.target});
-
-  final int score;
-  final int target;
-
-  @override
-  Widget build(BuildContext context) {
-    final progress = (score / target).clamp(0.0, 1.0);
-    final remaining = (target - score).clamp(0, target);
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE8ECEF)),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFE9A8),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: const Text(
-                  'Gold Contributor',
-                  style: TextStyle(
-                    color: Color(0xFF80620A),
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-              const Spacer(),
-              const Text(
-                'Diamond at 150 ↗',
-                style: TextStyle(
-                  color: Color(0xFF7A7F85),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              minHeight: 8,
-              value: progress,
-              color: const Color(0xFF0F7C68),
-              backgroundColor: const Color(0xFFE8ECEF),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Text(
-                '$score updates',
-                style: const TextStyle(
-                  color: Color(0xFF8A8F95),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                remaining == 0 ? 'Diamond unlocked' : '$remaining needed',
-                style: const TextStyle(
-                  color: Color(0xFF8A8F95),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AchievementsGrid extends StatelessWidget {
-  const _AchievementsGrid({required this.score, required this.masjidCount});
-
-  final int score;
-  final int masjidCount;
-
-  @override
-  Widget build(BuildContext context) {
-    final items = [
-      _AchievementData(
-        icon: '🕌',
-        title: 'First Masjid',
-        subtitle: masjidCount > 0 ? 'Completed' : 'Pending',
-        completed: masjidCount > 0,
-      ),
-      _AchievementData(
-        icon: '⭐',
-        title: '10 Updates',
-        subtitle: score >= 10 ? 'Completed' : '${10 - score} remaining',
-        completed: score >= 10,
-      ),
-      _AchievementData(
-        icon: '🏅',
-        title: '100 Updates',
-        subtitle: score >= 100 ? 'Completed' : '${100 - score} remaining',
-        completed: score >= 100,
-      ),
-      _AchievementData(
-        icon: '💎',
-        title: '150 Updates',
-        subtitle: score >= 150 ? 'Completed' : '${150 - score} remaining',
-        completed: score >= 150,
-      ),
-    ];
-
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: items.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        mainAxisExtent: 66,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
-      itemBuilder: (context, index) => _AchievementTile(items[index]),
-    );
-  }
-}
-
-class _AchievementData {
-  const _AchievementData({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.completed,
-  });
-
-  final String icon;
-  final String title;
-  final String subtitle;
-  final bool completed;
-}
-
-class _AchievementTile extends StatelessWidget {
-  const _AchievementTile(this.data);
-
-  final _AchievementData data;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: data.completed ? const Color(0xFFE0F6EF) : Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: data.completed
-              ? const Color(0xFF6FCBBB)
-              : const Color(0xFFE8ECEF),
-        ),
-      ),
-      child: Row(
-        children: [
-          Text(data.icon, style: const TextStyle(fontSize: 21)),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  data.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: data.completed
-                        ? const Color(0xFF0F7C68)
-                        : const Color(0xFF3F444A),
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                Text(
-                  data.subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF7A7F85),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _LeaderboardTile extends StatelessWidget {
-  const _LeaderboardTile({
-    required this.rank,
-    required this.name,
-    required this.score,
-  });
-
-  final int rank;
-  final String name;
-  final int score;
-
-  @override
-  Widget build(BuildContext context) {
-    final stars = (score ~/ 3).clamp(1, 5);
-    final rankColor = switch (rank) {
-      1 => const Color(0xFFD99A00),
-      2 => const Color(0xFF8A8F95),
-      3 => const Color(0xFFC56F32),
-      _ => const Color(0xFF0F7C68),
-    };
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE8ECEF)),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 28,
-            child: Text(
-              '$rank',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: rankColor,
-                fontWeight: FontWeight.w900,
-                fontSize: 17,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          _InitialsAvatar(name: name, radius: 20),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w900),
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                '$score pts',
-                style: const TextStyle(
-                  color: Color(0xFF0F7C68),
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              Text(
-                '★' * stars,
-                style: const TextStyle(color: Colors.amber, fontSize: 13),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CertificateTemplateCard extends StatelessWidget {
-  const _CertificateTemplateCard({
-    required this.name,
-    required this.score,
-    required this.masjidCount,
-    required this.isSharing,
-    required this.onPreviewCertificate,
-    required this.onShareWhatsApp,
-    required this.onCopyLink,
-    required this.onOpenAppLink,
-  });
-
-  final String name;
-  final int score;
-  final int masjidCount;
-  final bool isSharing;
-  final VoidCallback onPreviewCertificate;
-  final VoidCallback onShareWhatsApp;
-  final VoidCallback onCopyLink;
-  final VoidCallback onOpenAppLink;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const _RewardsSectionTitle('Certificate'),
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFFE8ECEF)),
-          ),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE0F6EF),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Icon(
-                      Icons.workspace_premium,
-                      color: Color(0xFF0F7C68),
-                      size: 30,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Volunteer Appreciation',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        Text(
-                          '$name · $score updates',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xFF657078),
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: isSharing ? null : onPreviewCertificate,
-                      icon: const Icon(Icons.visibility_outlined),
-                      label: const Text('Preview & Share Certificate'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF0F7C68),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: onShareWhatsApp,
-                      icon: const Icon(Icons.chat_bubble_outline),
-                      label: const Text('WhatsApp'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: onOpenAppLink,
-                      icon: const Icon(Icons.download_outlined),
-                      label: const Text('App Link'),
-                    ),
-                  ),
-                ],
-              ),
-              TextButton.icon(
-                onPressed: onCopyLink,
-                icon: const Icon(Icons.link),
-                label: const Text('Copy Android download link'),
-              ),
-              const Text(
-                'Tip: Share Certificate opens the phone share sheet, so users can post it to WhatsApp Status, Facebook, Instagram, or save it.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Color(0xFF7A7F85), fontSize: 12),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ShareableCertificate extends StatelessWidget {
-  const _ShareableCertificate({
-    required this.name,
-    required this.score,
-    required this.masjidCount,
-  });
-
-  final String name;
-  final int score;
-  final int masjidCount;
-
-  @override
-  Widget build(BuildContext context) {
-    final today = DateTime.now();
-    final dateLabel = '${today.day} ${_monthName(today.month)} ${today.year}';
-    return AspectRatio(
-      aspectRatio: 1.24,
-      child: FittedBox(
-        fit: BoxFit.contain,
-        child: SizedBox(
-          width: 620,
-          height: 500,
-          child: _CertificateCanvas(
-            name: name,
-            score: score,
-            masjidCount: masjidCount,
-            dateLabel: dateLabel,
-          ),
-        ),
-      ),
-    );
-  }
-
-  static String _monthName(int month) {
-    const names = [
-      'January',
-      'February',
-      'March',
-      'April',
-      'May',
-      'June',
-      'July',
-      'August',
-      'September',
-      'October',
-      'November',
-      'December',
-    ];
-    return names[month - 1];
-  }
-}
-
-class _CertificateCanvas extends StatelessWidget {
-  const _CertificateCanvas({
-    required this.name,
-    required this.score,
-    required this.masjidCount,
-    required this.dateLabel,
-  });
-
-  final String name;
-  final int score;
-  final int masjidCount;
-  final String dateLabel;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFB),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFDDE8EA), width: 1.5),
-      ),
-      child: Stack(
-        children: [
-          const Positioned(
-            right: -18,
-            top: -20,
-            child: _CertificateShape(
-              color: Color(0xFF2D93C7),
-              size: 116,
-              angle: .28,
-              opacity: .70,
-            ),
-          ),
-          const Positioned(
-            right: 56,
-            top: -22,
-            child: _CertificateShape(
-              color: Color(0xFF32B7AC),
-              size: 82,
-              angle: -.64,
-              opacity: .55,
-            ),
-          ),
-          const Positioned(
-            left: -54,
-            bottom: -34,
-            child: _CertificateShape(
-              color: Color(0xFF2D93C7),
-              size: 142,
-              angle: .18,
-              opacity: .68,
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(28, 18, 28, 18),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
-                      child: Image.asset(
-                        'assets/images/namaz-near-me-icon.png',
-                        width: 42,
-                        height: 42,
-                      ),
-                    ),
-                    const SizedBox(width: 9),
-                    const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'NAMAZ NEAR ME',
-                          style: TextStyle(
-                            color: Color(0xFF59BFAF),
-                            fontSize: 18,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: .5,
-                          ),
-                        ),
-                        Text(
-                          'Nearby masjids and jamaat timings',
-                          style: TextStyle(
-                            color: Color(0xFF8A939B),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                const Text(
-                  'Volunteer',
-                  style: TextStyle(
-                    color: Color(0xFF1B7DC3),
-                    fontSize: 58,
-                    fontStyle: FontStyle.italic,
-                    fontWeight: FontWeight.w400,
-                    letterSpacing: .5,
-                  ),
-                ),
-                const Text(
-                  'A P P R E C I A T I O N',
-                  style: TextStyle(
-                    color: Color(0xFF35ADA3),
-                    fontSize: 17,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 2,
-                  ),
-                ),
-                const SizedBox(height: 7),
-                const Text(
-                  'AWARDED TO',
-                  style: TextStyle(
-                    color: Color(0xFF7D858C),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.5,
-                  ),
-                ),
-                const SizedBox(height: 7),
-                Container(height: 1.5, color: const Color(0xFFD6EDF8)),
-                const SizedBox(height: 4),
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF1B7DC3),
-                    fontSize: 42,
-                    fontStyle: FontStyle.italic,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Container(height: 1.2, color: const Color(0xFFD6EDF8)),
-                const SizedBox(height: 8),
-                const Text(
-                  'for outstanding contribution to the Muslim community through masjid updates on Namaz Near Me, helping people reach jamaat on time.',
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Color(0xFF3E444A),
-                    fontSize: 13,
-                    fontStyle: FontStyle.italic,
-                    fontWeight: FontWeight.w600,
-                    height: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                const Text(
-                  'May Allah accept this as sadqa-e-jariya. Ameen.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Color(0xFF3E444A),
-                    fontSize: 12,
-                    fontStyle: FontStyle.italic,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const Spacer(),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    _CertificateFooterBlock(
-                      title: 'DATE',
-                      value: dateLabel,
-                    ),
-                    const Spacer(),
-                    _CertificateSeal(score: score, masjidCount: masjidCount),
-                    const Spacer(),
-                    const _CertificateFooterBlock(
-                      title: 'PRESENTED BY',
-                      value: 'FOODOMATIC®\nMoradabad',
-                      alignRight: true,
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CertificateShape extends StatelessWidget {
-  const _CertificateShape({
-    required this.color,
-    required this.size,
-    required this.angle,
-    required this.opacity,
-  });
-
-  final Color color;
-  final double size;
-  final double angle;
-  final double opacity;
-
-  @override
-  Widget build(BuildContext context) {
-    return Transform.rotate(
-      angle: angle,
+    return GestureDetector(
+      onTap: onOpen,
       child: Container(
-        width: size,
-        height: size * .72,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: opacity),
-          borderRadius: BorderRadius.circular(12),
+          color: const Color(0xFFFFF7E8),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFFFE4B4)),
         ),
-      ),
-    );
-  }
-}
-
-class _CertificateFooterBlock extends StatelessWidget {
-  const _CertificateFooterBlock({
-    required this.title,
-    required this.value,
-    this.alignRight = false,
-  });
-
-  final String title;
-  final String value;
-  final bool alignRight;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 98,
-      child: Column(
-        crossAxisAlignment:
-            alignRight ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-        children: [
-          Container(height: 1.2, color: const Color(0xFFB9CDD0)),
-          const SizedBox(height: 4),
-          Text(
-            title,
-            textAlign: alignRight ? TextAlign.right : TextAlign.left,
-            style: const TextStyle(
-              color: Color(0xFF8B949C),
-              fontSize: 8,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 2,
-            ),
-          ),
-          const SizedBox(height: 3),
-          Text(
-            value,
-            textAlign: alignRight ? TextAlign.right : TextAlign.left,
-            style: const TextStyle(
-              color: Color(0xFF343A40),
-              fontSize: 10.5,
-              fontWeight: FontWeight.w900,
-              height: 1.12,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CertificateSeal extends StatelessWidget {
-  const _CertificateSeal({required this.score, required this.masjidCount});
-
-  final int score;
-  final int masjidCount;
-
-  @override
-  Widget build(BuildContext context) {
-    final badgeLabel = score >= 150
-        ? 'DIAMOND'
-        : masjidCount > 0
-            ? 'GOLD'
-            : 'STARTER';
-    return Container(
-      width: 58,
-      height: 58,
-      decoration: BoxDecoration(
-        color: const Color(0xFFEAF9F7),
-        shape: BoxShape.circle,
-        border: Border.all(color: const Color(0xFF2AB5A8), width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF0F7C68).withValues(alpha: .14),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          ClipOval(
-            child: Image.asset(
-              'assets/images/namaz-near-me-icon.png',
-              width: 34,
-              height: 34,
-            ),
-          ),
-          Positioned(
-            bottom: 4,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFE9A8),
-                borderRadius: BorderRadius.circular(999),
-              ),
+        child: const Row(
+          children: [
+            Icon(Icons.workspace_premium, size: 16, color: Color(0xFFB8860B)),
+            SizedBox(width: 8),
+            Expanded(
               child: Text(
-                badgeLabel,
-                style: const TextStyle(
-                  color: Color(0xFF80620A),
-                  fontSize: 5.6,
-                  fontWeight: FontWeight.w900,
-                ),
+                'Contributors Leaderboard',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
               ),
             ),
-          ),
-        ],
+            Icon(Icons.chevron_right, size: 18, color: Colors.black38),
+          ],
+        ),
       ),
     );
   }
@@ -3939,6 +1908,7 @@ class _LocationPanel extends StatelessWidget {
     required this.radiusKm,
     required this.loadingLocation,
     required this.isCurrentLocation,
+    required this.permissionDeniedForever,
     required this.onRefreshLocation,
     required this.onRadiusChanged,
     required this.cityName,
@@ -3947,6 +1917,7 @@ class _LocationPanel extends StatelessWidget {
   final int radiusKm;
   final bool loadingLocation;
   final bool isCurrentLocation;
+  final bool permissionDeniedForever;
   final VoidCallback onRefreshLocation;
   final ValueChanged<int> onRadiusChanged;
   final String cityName;
@@ -3983,6 +1954,36 @@ class _LocationPanel extends StatelessWidget {
               ),
             ],
           ),
+          // Show a clear message when location permission is permanently denied
+          if (permissionDeniedForever) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(Icons.location_off,
+                    size: 14, color: Color(0xFF856404)),
+                const SizedBox(width: 6),
+                const Expanded(
+                  child: Text(
+                    'Location access blocked. Distances shown from city center.',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF856404)),
+                  ),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    minimumSize: Size.zero,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: () => Geolocator.openAppSettings(),
+                  child: const Text(
+                    'Open Settings',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF0F7C68)),
+                  ),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
@@ -3990,7 +1991,7 @@ class _LocationPanel extends StatelessWidget {
               segments: const [
                 ButtonSegment(value: 2, label: Text('2 km')),
                 ButtonSegment(value: 10, label: Text('10 km')),
-                ButtonSegment(value: 25, label: Text('All')),
+                ButtonSegment(value: 25, label: Text('25 km')),
               ],
               selected: {radiusKm},
               onSelectionChanged: (values) => onRadiusChanged(values.first),
@@ -4003,10 +2004,7 @@ class _LocationPanel extends StatelessWidget {
 }
 
 class _NamazFilter extends StatelessWidget {
-  const _NamazFilter({
-    required this.selectedNamaz,
-    required this.onSelected,
-  });
+  const _NamazFilter({required this.selectedNamaz, required this.onSelected});
 
   final String selectedNamaz;
   final ValueChanged<String> onSelected;
@@ -4016,27 +2014,414 @@ class _NamazFilter extends StatelessWidget {
     final options = {
       'all': 'All',
       'fajr': 'Fajr',
-      'zohar': 'Zohar',
+      'zohar': 'Zuhr',
       'asr': 'Asr',
       'maghrib': 'Maghrib',
       'isha': 'Isha',
-      'juma': 'Juma',
+      'juma': "Jumu'ah",
       'eid': 'Eid',
     };
 
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: options.entries.map((entry) {
-        return ChoiceChip(
-          label: Text(entry.value),
-          selected: selectedNamaz == entry.key,
-          onSelected: (_) => onSelected(entry.key),
+    final entries = options.entries.toList();
+    final eidWindow = getEidWindowStatus(DateTime.now());
+    final eidActive = eidWindow.type != EidType.none;
+
+    void handleTap(String key) {
+      if (key == 'eid' && !eidActive) {
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            title: const Row(
+              children: [
+                Text('🌙 ', style: TextStyle(fontSize: 20)),
+                Text(
+                  'Eid Timings',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+            content: const Text(
+              'Eid prayer times become available closer to Eid.\n\n'
+              'When the Eid moon is sighted, you can update your '
+              'mosque\'s Eid namaz time via "Suggest Edit" and it '
+              'will be visible to everyone instantly.\n\n'
+              'This filter activates automatically a few days before Eid.',
+              style: TextStyle(fontSize: 14, height: 1.5),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  'Got it',
+                  style: TextStyle(color: Color(0xFF0F7C68)),
+                ),
+              ),
+            ],
+          ),
         );
-      }).toList(),
+        return;
+      }
+      onSelected(key);
+    }
+
+    return Column(
+      children: [
+        Row(
+          children: List.generate(
+            4,
+            (i) => _filterCell(entries[i], selectedNamaz, handleTap),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: List.generate(
+            4,
+            (i) => _filterCell(entries[i + 4], selectedNamaz, handleTap),
+          ),
+        ),
+      ],
     );
   }
 }
+
+Widget _filterCell(
+  MapEntry<String, String> entry,
+  String selected,
+  ValueChanged<String> onSelected,
+) {
+  final isSelected = selected == entry.key;
+  return Expanded(
+    child: GestureDetector(
+      onTap: () => onSelected(entry.key),
+      child: Container(
+        height: 36,
+        margin: const EdgeInsets.symmetric(horizontal: 3),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF0F7C68) : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color:
+                isSelected ? const Color(0xFF0F7C68) : const Color(0xFFDDDDDD),
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          entry.value,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: isSelected ? Colors.white : Colors.black54,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+// ── Duplicate detection ──────────────────────────────────────────────────────
+
+String _normalizeMosqueName(String name) {
+  const stopWords = {
+    'masjid',
+    'mosque',
+    'مسجد',
+    'मस्जिद',
+    'jama',
+    'jamia',
+    'जामा',
+    'जामिया',
+    'wali',
+    'wala',
+    'wale',
+    'वाली',
+    'वाला',
+    'sahab',
+    'saab',
+    'sahib',
+    'ki',
+    'ka',
+    'ke',
+    'की',
+    'का',
+    'के',
+    'the',
+    'and',
+  };
+  final words = name
+      .toLowerCase()
+      .replaceAll(RegExp(r"[^\w\s؀-ۿऀ-ॿ]"), ' ')
+      .split(RegExp(r'\s+'))
+      .where((w) => w.isNotEmpty && !stopWords.contains(w))
+      .join(' ');
+  return words.trim();
+}
+
+Set<String> _trigrams(String s) {
+  final clean = s.replaceAll(' ', '');
+  if (clean.length < 3) return {clean};
+  return {
+    for (int i = 0; i <= clean.length - 3; i++) clean.substring(i, i + 3)
+  };
+}
+
+double _nameSimilarity(String a, String b) {
+  final na = _normalizeMosqueName(a);
+  final nb = _normalizeMosqueName(b);
+  if (na == nb) return 1.0;
+  if (na.isEmpty || nb.isEmpty) return 0.0;
+  final ta = _trigrams(na);
+  final tb = _trigrams(nb);
+  final intersection = ta.intersection(tb).length;
+  final union = ta.union(tb).length;
+  return union == 0 ? 0 : intersection / union;
+}
+
+int _duplicateScore(Mosque a, Mosque b) {
+  if (a.firestoreDocId == null ||
+      b.firestoreDocId == null ||
+      a.firestoreDocId == b.firestoreDocId) return 0;
+
+  int score = 0;
+
+  // Location proximity
+  if (a.hasCoordinates && b.hasCoordinates) {
+    final dist = Geolocator.distanceBetween(
+        a.latitude!, a.longitude!, b.latitude!, b.longitude!);
+    if (dist < 100)
+      score += 45;
+    else if (dist < 300)
+      score += 25;
+    else if (dist < 800) score += 10;
+  } else if ((a.area.isNotEmpty && b.area.isNotEmpty) &&
+      _nameSimilarity(a.area, b.area) > 0.5) {
+    score += 20;
+  }
+
+  // Name similarity (trigram, language-agnostic)
+  final nameSim = _nameSimilarity(a.name, b.name);
+  if (nameSim >= 0.85)
+    score += 50;
+  else if (nameSim >= 0.65)
+    score += 35;
+  else if (nameSim >= 0.45) score += 15;
+
+  // Address overlap
+  if (a.address.length > 5 && b.address.length > 5) {
+    if (_nameSimilarity(a.address, b.address) > 0.55) score += 15;
+  }
+
+  return score.clamp(0, 100);
+}
+
+/// Returns map of docId → list of duplicate Mosques for that entry.
+Map<String, List<Mosque>> _findDuplicateGroups(List<Mosque> mosques) {
+  final result = <String, List<Mosque>>{};
+  for (int i = 0; i < mosques.length; i++) {
+    for (int j = i + 1; j < mosques.length; j++) {
+      if (_duplicateScore(mosques[i], mosques[j]) >= 60) {
+        final idI = mosques[i].firestoreDocId;
+        final idJ = mosques[j].firestoreDocId;
+        if (idI != null && idJ != null) {
+          result.putIfAbsent(idI, () => []).add(mosques[j]);
+          result.putIfAbsent(idJ, () => []).add(mosques[i]);
+        }
+      }
+    }
+  }
+  return result;
+}
+
+/// Returns true if delete is allowed, false if rate-limited (and signs out).
+Future<bool> _checkAndRecordDelete(BuildContext context) async {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid == null) return false;
+
+  final today = DateTime.now();
+  final dateKey =
+      '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+  final quotaRef = FirebaseFirestore.instance
+      .collection('user_delete_quota')
+      .doc('${uid}_$dateKey');
+
+  try {
+    final snap = await quotaRef.get();
+    final count = (snap.data()?['count'] as num?)?.toInt() ?? 0;
+
+    if (count >= 1) {
+      // Rate-limited: sign out and warn
+      await FirebaseAuth.instance.signOut();
+      if (context.mounted) {
+        showDialog<void>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Account Suspended'),
+            content: const Text(
+              'You have deleted more than allowed mosques today. '
+              'Your account has been signed out for suspicious activity.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(_),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+      return false;
+    }
+
+    // Record the deletion
+    await quotaRef.set(
+      {'count': count + 1, 'date': dateKey, 'uid': uid},
+      SetOptions(merge: true),
+    );
+    return true;
+  } catch (_) {
+    return true; // allow on quota-check failure (don't block genuine users)
+  }
+}
+
+void _showDuplicateResolver(
+    BuildContext context, Mosque thisMosque, List<Mosque> others) {
+  final all = [thisMosque, ...others];
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Possible Duplicates',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            const Text('Keep one mosque and delete the rest.',
+                style: TextStyle(fontSize: 12, color: Colors.black54)),
+            const SizedBox(height: 16),
+            ...all.map((m) {
+              final timingCount = [
+                m.timings.fajr,
+                m.timings.zohar,
+                m.timings.asr,
+                m.timings.maghrib,
+                m.timings.isha,
+                m.timings.juma,
+              ].where((t) => t != null).length;
+              return Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8F8F8),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFE0E0E0)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(m.name,
+                              style: const TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w700),
+                              maxLines: 2),
+                          if (m.area.isNotEmpty)
+                            Text(m.area,
+                                style: const TextStyle(
+                                    fontSize: 11, color: Colors.black54)),
+                          const SizedBox(height: 4),
+                          Row(children: [
+                            Icon(
+                              timingCount > 0
+                                  ? Icons.check_circle
+                                  : Icons.cancel,
+                              size: 12,
+                              color:
+                                  timingCount > 0 ? Colors.green : Colors.grey,
+                            ),
+                            const SizedBox(width: 3),
+                            Text('$timingCount timings',
+                                style: const TextStyle(fontSize: 11)),
+                            const SizedBox(width: 10),
+                            Icon(
+                              m.hasCoordinates
+                                  ? Icons.location_on
+                                  : Icons.location_off,
+                              size: 12,
+                              color:
+                                  m.hasCoordinates ? Colors.green : Colors.grey,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                                m.hasCoordinates
+                                    ? 'Has location'
+                                    : 'No location',
+                                style: const TextStyle(fontSize: 11)),
+                          ]),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Column(
+                      children: [
+                        FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF0F7C68),
+                            minimumSize: const Size(64, 30),
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            textStyle: const TextStyle(fontSize: 11),
+                          ),
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Keep'),
+                        ),
+                        const SizedBox(height: 4),
+                        OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red,
+                            side: const BorderSide(color: Colors.red),
+                            minimumSize: const Size(64, 30),
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            textStyle: const TextStyle(fontSize: 11),
+                          ),
+                          onPressed: m.firestoreDocId == null
+                              ? null
+                              : () async {
+                                  Navigator.pop(ctx);
+                                  if (!await _checkAndRecordDelete(context))
+                                    return;
+                                  await FirebaseFirestore.instance
+                                      .collection('mosques')
+                                      .doc(m.firestoreDocId!)
+                                      .update({
+                                    'deleted': true,
+                                    'status': 'deleted'
+                                  });
+                                },
+                          child: const Text('Delete'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _MosqueCard extends StatelessWidget {
   const _MosqueCard({
@@ -4044,54 +2429,312 @@ class _MosqueCard extends StatelessWidget {
     required this.cityName,
     required this.isFavourite,
     required this.onToggleFavourite,
+    required this.isPinned,
+    required this.onTogglePin,
+    this.hijriAdjustment = 0,
+    this.duplicates = const [],
+    this.onContribute,
   });
 
   final MosqueResult result;
   final String cityName;
   final bool isFavourite;
   final VoidCallback onToggleFavourite;
+  final bool isPinned;
+  final VoidCallback onTogglePin;
+  final int hijriAdjustment;
+  final List<Mosque> duplicates;
+  final VoidCallback? onContribute;
+
+  bool get isPotentialDuplicate => duplicates.isNotEmpty;
 
   @override
   Widget build(BuildContext context) {
     final mosque = result.mosque;
     final next = result.nextJamaat;
-    final sourcePhone = mosque.timingVerifiedByPhone;
     final updateStamp = _formatUpdatedAt(mosque.timingUpdatedAt);
 
     return Card(
-      elevation: 0,
+      elevation: isPinned ? 2 : 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: Color(0xFFE0E0E0)),
+        side: BorderSide(
+          color: isPinned ? const Color(0xFF0F7C68) : const Color(0xFFE0E0E0),
+          width: isPinned ? 2 : 1,
+        ),
       ),
+      color: isPinned ? const Color(0xFFF0FAF7) : null,
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: Text(
-                    mosque.name,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
+                  child: GestureDetector(
+                    onTap: mosque.addedByName != null &&
+                            mosque.addedByName!.isNotEmpty
+                        ? () {
+                            showDialog<void>(
+                              context: context,
+                              builder: (_) => Dialog(
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                insetPadding: const EdgeInsets.symmetric(
+                                  horizontal: 40,
+                                  vertical: 24,
+                                ),
+                                child: Padding(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(18, 16, 18, 12),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          const Padding(
+                                            padding: EdgeInsets.only(top: 2),
+                                            child: Icon(Icons.mosque,
+                                                size: 16,
+                                                color: Color(0xFF0F7C68)),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  mosque.name,
+                                                  style: const TextStyle(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.w800,
+                                                    color: Color(0xFF0F7C68),
+                                                  ),
+                                                ),
+                                                if (mosque.address.isNotEmpty)
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 2),
+                                                    child: Text(
+                                                      mosque.address,
+                                                      style: const TextStyle(
+                                                        fontSize: 11,
+                                                        color:
+                                                            Color(0xFF888888),
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+                                      GestureDetector(
+                                        onTap: mosque.addedByPhone != null
+                                            ? () {
+                                                Navigator.pop(context);
+                                                _openContributorContact(
+                                                  context,
+                                                  mosque.addedByName!,
+                                                  mosque.addedByPhone,
+                                                );
+                                              }
+                                            : null,
+                                        child: RichText(
+                                          text: TextSpan(
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Color(0xFF555555),
+                                            ),
+                                            children: [
+                                              const TextSpan(text: 'Added by '),
+                                              TextSpan(
+                                                text: mosque.addedByName ?? '',
+                                                style: TextStyle(
+                                                  color:
+                                                      const Color(0xFF0F7C68),
+                                                  fontWeight: FontWeight.w700,
+                                                  decoration: mosque
+                                                              .addedByPhone !=
+                                                          null
+                                                      ? TextDecoration.underline
+                                                      : TextDecoration.none,
+                                                  decorationColor:
+                                                      const Color(0xFF0F7C68),
+                                                ),
+                                              ),
+                                              if (mosque.addedAt != null)
+                                                TextSpan(
+                                                  text:
+                                                      '  ·  ${_formatUpdatedAt(mosque.addedAt!)}',
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 10, vertical: 7),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFEFFAF7),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                        ),
+                                        child: const Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Jazakallah Khairan',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w800,
+                                                color: Color(0xFF0A5244),
+                                              ),
+                                            ),
+                                            SizedBox(height: 1),
+                                            Text(
+                                              'May Allah reward you with goodness.',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: Color(0xFF0F7C68),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Align(
+                                        alignment: Alignment.centerRight,
+                                        child: TextButton(
+                                          style: TextButton.styleFrom(
+                                            minimumSize: Size.zero,
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 14, vertical: 6),
+                                          ),
+                                          onPressed: () =>
+                                              Navigator.pop(context),
+                                          child: const Text('Close'),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+                        : null,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Flexible(
+                          child: SizedBox(
+                            height: 26,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                mosque.name,
+                                maxLines: 1,
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (mosque.isVerified)
+                          const Padding(
+                            padding: EdgeInsets.only(left: 5),
+                            child: Icon(
+                              Icons.verified,
+                              size: 16,
+                              color: Color(0xFF0F7C68),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
-                if (mosque.isVerified)
-                  const Icon(Icons.verified, color: Color(0xFF0F7C68)),
                 IconButton(
-                  tooltip: isFavourite ? 'Remove favourite' : 'Add favourite',
-                  onPressed: onToggleFavourite,
+                  tooltip: isPinned ? 'Unpin mosque' : 'Pin — my mosque',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  onPressed: onTogglePin,
                   icon: Icon(
-                    isFavourite ? Icons.star : Icons.star_border,
-                    color: isFavourite ? Colors.amber : Colors.black38,
+                    isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                    color: isPinned ? const Color(0xFF0F7C68) : Colors.black38,
+                    size: 18,
                   ),
                 ),
               ],
             ),
+            if (mosque.needsReview || isPotentialDuplicate)
+              Row(
+                children: [
+                  if (mosque.needsReview)
+                    Container(
+                      margin: const EdgeInsets.only(top: 4, right: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: Colors.orange.shade200),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.warning_amber,
+                              size: 12, color: Colors.orange),
+                          SizedBox(width: 4),
+                          Text('Under Review',
+                              style: TextStyle(
+                                  fontSize: 10, color: Colors.orange)),
+                        ],
+                      ),
+                    ),
+                  if (isPotentialDuplicate)
+                    GestureDetector(
+                      onTap: () =>
+                          _showDuplicateResolver(context, mosque, duplicates),
+                      child: Container(
+                        margin: const EdgeInsets.only(top: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: Colors.red.shade200),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.copy_outlined,
+                                size: 12, color: Colors.red),
+                            SizedBox(width: 4),
+                            Text('Possible Duplicate — tap to resolve',
+                                style:
+                                    TextStyle(fontSize: 10, color: Colors.red)),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             const SizedBox(height: 6),
             Text('${mosque.area} - ${_distanceLabel(mosque)}'),
             const SizedBox(height: 12),
@@ -4133,15 +2776,21 @@ class _MosqueCard extends StatelessWidget {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        const Text('starts in',
-                            style: TextStyle(
-                                fontSize: 10, color: Color(0xFF0F6E56))),
-                        Text(next.startsIn,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF0F6E56),
-                            )),
+                        const Text(
+                          'starts in',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Color(0xFF0F6E56),
+                          ),
+                        ),
+                        Text(
+                          next.startsIn,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF0F6E56),
+                          ),
+                        ),
                       ],
                     ),
                 ],
@@ -4152,25 +2801,29 @@ class _MosqueCard extends StatelessWidget {
               Container(
                 width: double.infinity,
                 margin: const EdgeInsets.only(bottom: 8),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFFFFF3CD),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: const Color(0xFFFFD700)),
                 ),
-                child: Row(children: [
-                  const Text('🌙', style: TextStyle(fontSize: 14)),
-                  const SizedBox(width: 6),
-                  Text(
-                    _eidBannerText()!,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF856404),
+                child: Row(
+                  children: [
+                    const Text('🌙', style: TextStyle(fontSize: 14)),
+                    const SizedBox(width: 6),
+                    Text(
+                      _eidBannerText()!,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF856404),
+                      ),
                     ),
-                  ),
-                ]),
+                  ],
+                ),
               ),
             ],
             GridView.count(
@@ -4181,50 +2834,188 @@ class _MosqueCard extends StatelessWidget {
               crossAxisSpacing: 6,
               mainAxisSpacing: 6,
               children: [
-                _TimingCell(label: 'Fajr', value: mosque.timings.fajr),
-                _TimingCell(label: 'Zohar', value: mosque.timings.zohar),
-                _TimingCell(label: 'Asr', value: mosque.timings.asr),
-                _TimingCell(label: 'Maghrib', value: mosque.timings.maghrib),
-                _TimingCell(label: 'Isha', value: mosque.timings.isha),
-                _TimingCell(label: 'Juma', value: mosque.timings.juma),
+                _TimingCell(
+                  label: 'Fajr',
+                  value: mosque.timings.fajr,
+                  editMeta: mosque.prayerEditMeta['fajr'],
+                ),
+                _TimingCell(
+                  label: 'Zuhr',
+                  value: mosque.timings.zohar,
+                  editMeta: mosque.prayerEditMeta['zohar'],
+                ),
+                _TimingCell(
+                  label: 'Asr',
+                  value: mosque.timings.asr,
+                  editMeta: mosque.prayerEditMeta['asr'],
+                ),
+                _TimingCell(
+                  label: 'Maghrib',
+                  value: mosque.timings.maghrib,
+                  editMeta: mosque.prayerEditMeta['maghrib'],
+                ),
+                _TimingCell(
+                  label: 'Isha',
+                  value: mosque.timings.isha,
+                  editMeta: mosque.prayerEditMeta['isha'],
+                ),
+                _TimingCell(
+                  label: "Jumu'ah",
+                  value: mosque.timings.juma,
+                  editMeta: mosque.prayerEditMeta['juma'],
+                ),
                 if (_shouldShowEid(EidType.eidUlFitr) &&
                     mosque.timings.eidUlFitr != null)
                   _TimingCell(
-                      label: 'Eid ul Fitr', value: mosque.timings.eidUlFitr),
+                    label: 'Eid Fitr',
+                    value: mosque.timings.eidUlFitr,
+                    editMeta: mosque.prayerEditMeta['eid_ul_fitr'],
+                  ),
                 if (_shouldShowEid(EidType.eidUlAdha) &&
                     mosque.timings.eidUlAzha != null)
                   _TimingCell(
-                      label: 'Eid ul Azha', value: mosque.timings.eidUlAzha),
+                    label: 'Eid Adha',
+                    value: mosque.timings.eidUlAzha,
+                    editMeta: mosque.prayerEditMeta['eid_ul_azha'],
+                  ),
               ],
             ),
             const SizedBox(height: 12),
-            // Verified badge + last update
+            // Stale timing warning — shown when timings haven't been updated in 60+ days
+            Builder(
+              builder: (_) {
+                final updatedAt = mosque.timingUpdatedAt;
+                // Dates before 2015 are seeded defaults, not real updates
+                final isDefaultTimestamp = updatedAt.year < 2015;
+                final daysSinceUpdate =
+                    DateTime.now().difference(updatedAt).inDays;
+                final isStale = !isDefaultTimestamp &&
+                    daysSinceUpdate >= 60 &&
+                    mosque.hasAnyTiming;
+                final needsTimings = !mosque.hasAnyTiming || isDefaultTimestamp;
+                if (!isStale && !needsTimings) return const SizedBox.shrink();
+                final message = needsTimings
+                    ? 'Community timings not yet added — tap + to contribute'
+                    : 'Timings not updated in $daysSinceUpdate days — please verify';
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: GestureDetector(
+                    onTap: needsTimings ? onContribute : null,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: needsTimings
+                            ? const Color(0xFFEFFAF7)
+                            : const Color(0xFFFFF8E1),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: needsTimings
+                              ? const Color(0xFF0F7C68)
+                              : const Color(0xFFFFCC02),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            needsTimings
+                                ? Icons.add_circle_outline
+                                : Icons.access_time,
+                            size: 13,
+                            color: needsTimings
+                                ? const Color(0xFF0F7C68)
+                                : const Color(0xFF856404),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              message,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: needsTimings
+                                    ? const Color(0xFF0F7C68)
+                                    : const Color(0xFF856404),
+                              ),
+                            ),
+                          ),
+                          if (needsTimings)
+                            const Icon(Icons.arrow_forward_ios,
+                                size: 10, color: Color(0xFF0F7C68)),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+            // Verified badge + timestamp + contributor name
             Row(
               children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE1F5EE),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.check, size: 12, color: Color(0xFF0F6E56)),
-                      SizedBox(width: 3),
-                      Text('Verified',
+                if (mosque.isVerified)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE1F5EE),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.check, size: 12, color: Color(0xFF0F6E56)),
+                        SizedBox(width: 3),
+                        Text(
+                          'Verified',
                           style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF0F6E56),
-                              fontWeight: FontWeight.w600)),
-                    ],
+                            fontSize: 11,
+                            color: Color(0xFF0F6E56),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (mosque.isVerified) const SizedBox(width: 6),
+                Expanded(
+                  child: Builder(
+                    builder: (_) {
+                      String prayerLabel = '';
+                      String contributorLabel = '';
+                      // Exclude maghrib — it auto-calculates from sunset; only
+                      // show it here if someone explicitly did a manual edit.
+                      final manualEdits = mosque.prayerEditMeta.entries
+                          .where((e) =>
+                              e.key != 'maghrib' ||
+                              e.value.name.isNotEmpty && e.value.name != 'auto')
+                          .toList();
+                      if (manualEdits.isNotEmpty) {
+                        final recent = manualEdits.reduce(
+                          (a, b) => a.value.updatedAt.isAfter(b.value.updatedAt)
+                              ? a
+                              : b,
+                        );
+                        prayerLabel = ' · ${_title(recent.key)}';
+                        if (recent.value.name.isNotEmpty) {
+                          contributorLabel = ' by ${recent.value.name}';
+                        }
+                      } else if (mosque.timingVerifiedByName != null &&
+                          mosque.timingVerifiedByName!.isNotEmpty) {
+                        contributorLabel = ' by ${mosque.timingVerifiedByName}';
+                      }
+                      return Text(
+                        '$updateStamp$prayerLabel$contributorLabel',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.black45,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                      );
+                    },
                   ),
                 ),
-                const SizedBox(width: 8),
-                Text(updateStamp,
-                    style:
-                        const TextStyle(fontSize: 12, color: Colors.black45)),
               ],
             ),
             const SizedBox(height: 10),
@@ -4239,33 +3030,46 @@ class _MosqueCard extends StatelessWidget {
                       backgroundColor: const Color(0xFF0F7C68),
                       padding: const EdgeInsets.symmetric(vertical: 10),
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(24)),
+                        borderRadius: BorderRadius.circular(24),
+                      ),
                     ),
-                    child: const Text('Navigate',
-                        style: TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w600)),
+                    child: const Text(
+                      'Navigate',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
                 _IconRoundBtn(
-                    icon: Icons.chat_bubble_outline,
-                    onTap: sourcePhone != null
-                        ? () => _openWhatsApp(sourcePhone)
-                        : null),
+                  icon: Icons.edit_note,
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => SuggestEditScreen(mosque: mosque),
+                    ),
+                  ),
+                ),
                 const SizedBox(width: 6),
                 _IconRoundBtn(
-                    icon: Icons.phone_outlined,
-                    onTap: sourcePhone != null
-                        ? () => _callPhone(sourcePhone)
-                        : null),
+                  icon: Icons.alarm_add,
+                  onTap: () => _MosqueCard._openReminderSheet(context, mosque),
+                ),
                 const SizedBox(width: 6),
                 _IconRoundBtn(
-                    icon: Icons.share_outlined,
-                    onTap: () => _shareTimingOnWhatsApp(mosque, next)),
+                  icon: Icons.share_outlined,
+                  onTap: () => _shareTimingOnWhatsApp(mosque, next),
+                ),
                 const SizedBox(width: 6),
                 _IconRoundBtn(
-                    icon: Icons.more_horiz,
-                    onTap: () => _openMoreSheet(context, mosque, next)),
+                  icon: Icons.flag_outlined,
+                  color: Colors.orange.shade400,
+                  onTap: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => _ReportMosqueDialog(mosque: mosque),
+                  ),
+                ),
               ],
             ),
           ],
@@ -4274,20 +3078,22 @@ class _MosqueCard extends StatelessWidget {
     );
   }
 
-  static bool _shouldShowEid(EidType type) {
-    final window = getEidWindowStatus(DateTime.now());
+  bool _shouldShowEid(EidType type) {
+    final window =
+        getEidWindowStatus(DateTime.now(), hijriAdjustment: hijriAdjustment);
     return window.type == type;
   }
 
-  static String? _eidBannerText() {
-    final window = getEidWindowStatus(DateTime.now());
+  String? _eidBannerText() {
+    final window =
+        getEidWindowStatus(DateTime.now(), hijriAdjustment: hijriAdjustment);
     if (window.type == EidType.none) return null;
     final name =
         window.type == EidType.eidUlFitr ? 'Eid ul Fitr' : 'Eid ul Adha';
-    if (window.isEidDay) return 'Eid Mubarak! $name aaj hai';
+    if (window.isEidDay) return 'Eid Mubarak! $name is today';
     if (window.isBeforeEid) {
       final d = window.daysUntilEid;
-      return '$name aane mein $d din baki';
+      return '$name in $d day${d == 1 ? '' : 's'}';
     }
     return null;
   }
@@ -4300,7 +3106,11 @@ class _MosqueCard extends StatelessWidget {
   }
 
   static String _title(String value) {
-    return value[0].toUpperCase() + value.substring(1);
+    return switch (value.toLowerCase()) {
+      'zohar' => 'Zuhr',
+      'juma' => "Jumu'ah",
+      _ => value[0].toUpperCase() + value.substring(1),
+    };
   }
 
   static Future<void> _openMaps(Mosque mosque) async {
@@ -4310,20 +3120,47 @@ class _MosqueCard extends StatelessWidget {
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
-  static Future<void> _openWhatsApp(String phone) async {
-    final digits = phone.replaceAll(RegExp(r'\D'), '');
-    final uri = Uri.parse('https://wa.me/$digits');
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
-  }
-
-  static Future<void> _callPhone(String phone) async {
-    final digits = phone.replaceAll(RegExp(r'\D'), '');
-    final uri = Uri.parse('tel:+$digits');
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  static Future<void> _openContributorContact(
+    BuildContext context,
+    String name,
+    String? phone,
+  ) async {
+    if (phone == null || phone.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$name ka number available nahi hai')),
+        );
+      }
+      return;
+    }
+    // E.164 format (+919876543210) → WhatsApp needs digits only
+    final digits = phone.replaceAll(RegExp(r'[^\d]'), '');
+    final whatsappUri = Uri.parse('https://wa.me/$digits');
+    if (await canLaunchUrl(whatsappUri)) {
+      await launchUrl(whatsappUri, mode: LaunchMode.externalApplication);
+    } else {
+      if (context.mounted) {
+        showDialog<void>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: Text(name),
+            content: Text('Phone: $phone'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
   }
 
   static Future<void> _shareTimingOnWhatsApp(
-      Mosque mosque, NextJamaat? next) async {
+    Mosque mosque,
+    NextJamaat? next,
+  ) async {
     final nextLine = next == null
         ? 'Namaz timing pending'
         : 'Next ${_title(next.namaz)} jamaat: ${formatPrayerStoredTime(next.namaz, next.time)} (in ${next.startsIn})';
@@ -4344,7 +3181,9 @@ class _MosqueCard extends StatelessWidget {
   }
 
   static Future<void> _openReminderSheet(
-      BuildContext context, Mosque mosque) async {
+    BuildContext context,
+    Mosque mosque,
+  ) async {
     var selectedNamaz = 'fajr';
     var before = 10;
     await showModalBottomSheet(
@@ -4354,13 +3193,19 @@ class _MosqueCard extends StatelessWidget {
         return StatefulBuilder(
           builder: (context, setState) => Padding(
             padding: EdgeInsets.fromLTRB(
-                16, 16, 16, MediaQuery.of(context).viewPadding.bottom + 16),
+              16,
+              16,
+              16,
+              MediaQuery.of(context).viewPadding.bottom + 16,
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Set reminder - ${mosque.name}',
-                    style: const TextStyle(fontWeight: FontWeight.w800)),
+                Text(
+                  'Set reminder - ${mosque.name}',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
                   initialValue: selectedNamaz,
@@ -4370,10 +3215,12 @@ class _MosqueCard extends StatelessWidget {
                   ),
                   items: const [
                     DropdownMenuItem(value: 'fajr', child: Text('Fajr')),
-                    DropdownMenuItem(value: 'zohar', child: Text('Zohar')),
+                    DropdownMenuItem(value: 'zohar', child: Text('Zuhr')),
                     DropdownMenuItem(value: 'asr', child: Text('Asr')),
                     DropdownMenuItem(value: 'maghrib', child: Text('Maghrib')),
                     DropdownMenuItem(value: 'isha', child: Text('Isha')),
+                    DropdownMenuItem(
+                        value: 'juma', child: Text("Jumu'ah (Fri)")),
                   ],
                   onChanged: (v) => setState(() => selectedNamaz = v ?? 'fajr'),
                 ),
@@ -4403,15 +3250,18 @@ class _MosqueCard extends StatelessWidget {
                         );
                         return;
                       }
-                      final jamaat =
-                          _nextDateTimeForStoredTime(selectedNamaz, storedTime);
+                      final jamaat = _nextDateTimeForStoredTime(
+                        selectedNamaz,
+                        storedTime,
+                      );
                       final id = Object.hash(
-                              _mosqueKey(mosque.name),
-                              selectedNamaz,
-                              before)
-                          .abs() % 2147483647;
+                            mosqueKey(mosque.name),
+                            selectedNamaz,
+                            before,
+                          ).abs() %
+                          2147483647;
                       try {
-                        await NotificationService.instance
+                        final canExact = await NotificationService.instance
                             .schedulePrayerReminder(
                           id: id,
                           mosqueName: mosque.name,
@@ -4428,13 +3278,59 @@ class _MosqueCard extends StatelessWidget {
                               ),
                             ),
                           );
+                          if (!canExact) {
+                            showDialog(
+                              context: context,
+                              builder: (_) => AlertDialog(
+                                title: const Text('Enable Exact Reminders'),
+                                content: const Text(
+                                  'Reminder saved. For precise alerts on Samsung:\n\n'
+                                  '1. Settings → Battery and device care → Battery\n'
+                                  '2. Background usage limits\n'
+                                  '3. "Never sleeping apps" → (+) → Add Namaz Near Me\n\n'
+                                  'This is a one-time setup.',
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () async {
+                                      Navigator.of(context).pop();
+                                      try {
+                                        await launchUrl(
+                                          Uri.parse(
+                                            'package:com.samsung.android.lool',
+                                          ),
+                                          mode: LaunchMode.externalApplication,
+                                        );
+                                      } catch (_) {
+                                        try {
+                                          await launchUrl(
+                                            Uri.parse(
+                                              'android.settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+                                            ),
+                                          );
+                                        } catch (_) {}
+                                      }
+                                    },
+                                    child: const Text('Open Settings'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.of(context).pop(),
+                                    child: const Text('Later'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
                         }
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                                content: Text(
-                                    'Reminder nahi lag saka. Please try again. ($e)')),
+                              content: Text(
+                                'Could not set reminder. Please try again. ($e)',
+                              ),
+                            ),
                           );
                         }
                       }
@@ -4456,16 +3352,144 @@ class _MosqueCard extends StatelessWidget {
     final parts = normalized.split(':');
     final hour = int.tryParse(parts.first) ?? now.hour;
     final minute = int.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0;
+    if (prayer == 'juma') {
+      final daysToFriday = (DateTime.friday - now.weekday + 7) % 7;
+      var target = DateTime(
+        now.year,
+        now.month,
+        now.day + daysToFriday,
+        hour,
+        minute,
+      );
+      if (!target.isAfter(now)) target = target.add(const Duration(days: 7));
+      return target;
+    }
     var target = DateTime(now.year, now.month, now.day, hour, minute);
     if (!target.isAfter(now)) target = target.add(const Duration(days: 1));
     return target;
   }
 }
 
+class _ReportMosqueDialog extends StatefulWidget {
+  const _ReportMosqueDialog({required this.mosque});
+  final Mosque mosque;
+
+  @override
+  State<_ReportMosqueDialog> createState() => _ReportMosqueDialogState();
+}
+
+class _ReportMosqueDialogState extends State<_ReportMosqueDialog> {
+  String _reason = 'timing_wrong';
+  bool _submitting = false;
+
+  static const _reasons = {
+    'timing_wrong': 'Prayer timing is incorrect',
+    'does_not_exist': 'Masjid does not exist here',
+    'duplicate': 'Duplicate entry',
+    'location_wrong': 'Location is incorrect',
+  };
+
+  Future<void> _submit() async {
+    final phone = context.read<AppState>().verifiedPhone;
+    if (phone == null) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Please verify your phone via "Update" first, then you can submit a report.',
+          ),
+        ),
+      );
+      return;
+    }
+    setState(() => _submitting = true);
+    try {
+      await FirebaseFirestore.instance.collection('mosque_edits').add({
+        'edit_type': 'report',
+        'mosque_name': widget.mosque.name,
+        'mosque_id': widget.mosque.firestoreDocId ?? '',
+        'city': (widget.mosque.city ?? '').trim(),
+        'area': widget.mosque.area,
+        'report_reason': _reason,
+        'reported_by_phone': phone,
+        'submitted_by_uid': FirebaseAuth.instance.currentUser?.uid,
+        'status': 'pending',
+        'scoreAwarded': false,
+        'created_at': FieldValue.serverTimestamp(),
+      });
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Thank you! Report submitted.')),
+      );
+    } catch (_) {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Icon(Icons.flag_outlined, color: Colors.orange, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              widget.mosque.name,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('What is the issue?',
+              style: TextStyle(fontSize: 13, color: Colors.black54)),
+          const SizedBox(height: 8),
+          ..._reasons.entries.map(
+            (e) => RadioListTile<String>(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: Text(e.value, style: const TextStyle(fontSize: 13)),
+              value: e.key,
+              groupValue: _reason,
+              onChanged: (v) => setState(() => _reason = v!),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submitting ? null : _submit,
+          style: FilledButton.styleFrom(backgroundColor: Colors.orange),
+          child: _submitting
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
+                )
+              : const Text('Submit Report'),
+        ),
+      ],
+    );
+  }
+}
+
 class _IconRoundBtn extends StatelessWidget {
-  const _IconRoundBtn({required this.icon, this.onTap});
+  const _IconRoundBtn({required this.icon, this.onTap, this.color});
   final IconData icon;
   final VoidCallback? onTap;
+  final Color? color;
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -4478,52 +3502,25 @@ class _IconRoundBtn extends StatelessWidget {
           border: Border.all(color: const Color(0xFFE0E0E0)),
           color: const Color(0xFFF9F9F9),
         ),
-        child: Icon(icon, size: 18, color: const Color(0xFF555555)),
+        child: Icon(icon, size: 18, color: color ?? const Color(0xFF555555)),
       ),
     );
   }
 }
 
-void _openMoreSheet(BuildContext context, Mosque mosque, NextJamaat? next) {
-  showModalBottomSheet(
-    context: context,
-    builder: (_) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: const Icon(Icons.alarm_add),
-            title: const Text('Set Reminder'),
-            onTap: () {
-              Navigator.pop(context);
-              _MosqueCard._openReminderSheet(context, mosque);
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.edit_note),
-            title: const Text('Suggest edit'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => SuggestEditScreen(mosque: mosque),
-              ));
-            },
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
 class _TimingCell extends StatelessWidget {
-  const _TimingCell({required this.label, required this.value});
+  const _TimingCell({required this.label, required this.value, this.editMeta});
+
   final String label;
   final String? value;
+  final PrayerEditMeta? editMeta;
+
   @override
   Widget build(BuildContext context) {
     final display =
         value == null ? '—' : formatPrayerStoredTime(_prayerKey(label), value!);
-    return Container(
+    final meta = editMeta;
+    final content = Container(
       decoration: BoxDecoration(
         color: const Color(0xFFF5F5F5),
         borderRadius: BorderRadius.circular(6),
@@ -4533,18 +3530,33 @@ class _TimingCell extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(label,
-              style: const TextStyle(fontSize: 10, color: Color(0xFF888888)),
-              maxLines: 1),
-          Text(display,
-              style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF111111)),
-              maxLines: 1),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFF888888),
+                  ),
+                  maxLines: 1,
+                ),
+              ),
+            ],
+          ),
+          Text(
+            display,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF111111),
+            ),
+            maxLines: 1,
+          ),
         ],
       ),
     );
+    return content;
   }
 }
 
@@ -4568,8 +3580,9 @@ String? normalizeTimingInput(String value) {
   final text = value.trim().toUpperCase().replaceAll('.', '');
   if (text.isEmpty) return null;
 
-  final match =
-      RegExp(r'^(\d{1,2})(?::(\d{1,2}))?\s*(AM|PM)?$').firstMatch(text);
+  final match = RegExp(
+    r'^(\d{1,2})(?::(\d{1,2}))?\s*(AM|PM)?$',
+  ).firstMatch(text);
   if (match == null) return text;
 
   var hour = int.tryParse(match.group(1)!);
@@ -4603,7 +3616,7 @@ String? normalizePrayerTimingInput(String prayer, String value) {
   final minute = int.tryParse(parts[1]);
   if (hour == null || minute == null) return normalized;
 
-  if (key == 'fajr') {
+  if (_forceAmPrayerKeys.contains(key)) {
     if (hour == 12) hour = 0;
     if (hour > 12) hour -= 12;
   } else if (_forcePmPrayerKeys.contains(key)) {
@@ -4614,11 +3627,16 @@ String? normalizePrayerTimingInput(String prayer, String value) {
 }
 
 const _forcePmPrayerKeys = {'zohar', 'asr', 'maghrib', 'isha', 'juma'};
+const _forceAmPrayerKeys = {'fajr', 'eid_ul_fitr', 'eid_ul_azha'};
 
 String _prayerKey(String value) {
   final key = value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
   if (key == 'zuhr' || key == 'dhuhr' || key == 'zuhur') return 'zohar';
   if (key == 'jumma' || key == 'jumuah') return 'juma';
+  if (key == 'eid_fitr' || key == 'eidul_fitr') return 'eid_ul_fitr';
+  if (key == 'eid_adha' || key == 'eid_azha' || key == 'eidul_azha') {
+    return 'eid_ul_azha';
+  }
   return key.replaceAll(RegExp(r'_+$'), '');
 }
 
@@ -4638,8 +3656,9 @@ class _MosqueSearchDelegate extends SearchDelegate<MosqueResult?> {
 
   @override
   Widget buildLeading(BuildContext context) => IconButton(
-      icon: const Icon(Icons.arrow_back),
-      onPressed: () => close(context, null));
+        icon: const Icon(Icons.arrow_back),
+        onPressed: () => close(context, null),
+      );
 
   @override
   Widget buildResults(BuildContext context) => _buildList();
@@ -4650,18 +3669,22 @@ class _MosqueSearchDelegate extends SearchDelegate<MosqueResult?> {
   Widget _buildList() {
     final q = query.toLowerCase();
     final filtered = results
-        .where((r) =>
-            r.mosque.name.toLowerCase().contains(q) ||
-            r.mosque.area.toLowerCase().contains(q) ||
-            r.mosque.address.toLowerCase().contains(q))
+        .where(
+          (r) =>
+              r.mosque.name.toLowerCase().contains(q) ||
+              r.mosque.area.toLowerCase().contains(q) ||
+              r.mosque.address.toLowerCase().contains(q),
+        )
         .toList();
 
     if (filtered.isEmpty) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(32),
-          child:
-              Text('No mosque found.', style: TextStyle(color: Colors.black54)),
+          child: Text(
+            'No mosque found.',
+            style: TextStyle(color: Colors.black54),
+          ),
         ),
       );
     }
@@ -4673,8 +3696,10 @@ class _MosqueSearchDelegate extends SearchDelegate<MosqueResult?> {
         final mosque = filtered[index].mosque;
         return ListTile(
           leading: const Icon(Icons.mosque, color: Color(0xFF0F7C68)),
-          title: Text(mosque.name,
-              style: const TextStyle(fontWeight: FontWeight.w700)),
+          title: Text(
+            mosque.name,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
           subtitle: Text(mosque.area),
           trailing: Text(
             mosque.distanceMeters < 1000
@@ -4690,14 +3715,84 @@ class _MosqueSearchDelegate extends SearchDelegate<MosqueResult?> {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+  const _EmptyState({
+    required this.message,
+    this.onViewAll,
+    this.onWidenRadius,
+    this.onAddMosque,
+  });
+  final String message;
+  final VoidCallback? onViewAll;
+  final VoidCallback? onWidenRadius;
+  final VoidCallback? onAddMosque;
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 40),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40),
       child: Center(
-        child: Text('No mosques found in this radius.'),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.mosque_outlined, size: 40, color: Colors.black26),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.black54),
+            ),
+            if (onViewAll != null) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: onViewAll,
+                icon: const Icon(Icons.mosque_outlined),
+                label: const Text('View all mosques'),
+              ),
+            ],
+            if (onWidenRadius != null) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: onWidenRadius,
+                icon: const Icon(Icons.add_circle_outline, size: 16),
+                label: const Text('Widen search radius'),
+              ),
+            ],
+            if (onAddMosque != null) ...[
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: onAddMosque,
+                icon: const Icon(Icons.add_location_alt_outlined, size: 16),
+                label: const Text('Add the first mosque here'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SeedingState extends StatelessWidget {
+  const _SeedingState({required this.cityName});
+  final String cityName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 48),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            Text(
+              'Finding mosques in $cityName...',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.black54),
+            ),
+          ],
+        ),
       ),
     );
   }
